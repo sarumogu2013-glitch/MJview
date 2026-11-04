@@ -62,6 +62,8 @@ pub enum ClientMsg {
     Ping {
         client_time: i64,
     },
+    /// 連番の抜けに気づいたとき、状態の全体を取り直す
+    RequestSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,6 +90,9 @@ pub enum ServerMsg {
         at: i64,
         view: TableStateView,
         overlays: Vec<Overlay>,
+        /// 操作したクライアントのロール（他の端末が操作したことの表示用）
+        #[serde(default)]
+        by: Option<ClientRole>,
     },
     ActionResult {
         request_id: u64,
