@@ -78,6 +78,7 @@ pub struct OperatorUi {
     // 顔カメラ・OBS・切替の設定（編集中の下書き）
     cfg_draft: Option<ClientConfig>,
     cfg_msg: Option<String>,
+    cfg_confirm_delay: bool,
 }
 
 impl Default for OperatorUi {
@@ -112,6 +113,7 @@ impl Default for OperatorUi {
             confirm_end: false,
             cfg_draft: None,
             cfg_msg: None,
+            cfg_confirm_delay: false,
         }
     }
 }
@@ -277,6 +279,15 @@ pub fn operator_ui(
                 .clicked()
             {
                 net.redo();
+            }
+            if cfg.delay_secs > 0.0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 200, 80),
+                    format!(
+                        "配信ディレイ {:.1}秒（出力ウィンドウは遅れて表示）",
+                        cfg.delay_secs
+                    ),
+                );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(format!(
@@ -1238,6 +1249,29 @@ fn face_settings_panel(
             }
         }
         ui.separator();
+        ui.label("配信ディレイ");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut d.delay_secs).range(0.0..=600.0).speed(0.5).suffix("秒"))
+                .on_hover_text("出力ウィンドウ全体（点数・手牌・演出・顔カメラ）を遅らせます。操作ウィンドウと選手用画面は遅れません");
+            ui.weak("OBS の配信遅延を使う場合は 0 にしてください");
+        });
+        ui.horizontal(|ui| {
+            ui.label("同期補正（ms）");
+            for i in 0..4 {
+                ui.label(SeatId(i as u8).label().to_string());
+                ui.add(egui::DragValue::new(&mut d.sync_offset_ms[i]).range(-5000..=10000).speed(10.0))
+                    .on_hover_text("この顔カメラの映像だけをさらに遅らせる（正）／早める（負、ディレイの範囲内）");
+            }
+        });
+        let bytes: usize = face.streams.iter().flatten().map(|s| s.buffered_bytes()).sum();
+        let per_sec: f64 = face.streams.iter().flatten().map(|s| s.buffered_bytes() as f64 / (face.delay_secs + 3.0)).sum();
+        ui.weak(format!(
+            "映像のバッファ: いま {:.0}MB（{:.0}秒にすると約 {:.0}MB）",
+            bytes as f64 / 1e6,
+            d.delay_secs,
+            per_sec * (d.delay_secs + 3.0) / 1e6
+        ));
+        ui.separator();
         ui.label("選手画面の切替");
         let fs = &mut d.face_switch;
         ui.horizontal(|ui| {
@@ -1294,10 +1328,15 @@ fn face_settings_panel(
         });
         let draft = d.clone();
         match act {
+            1 if draft.delay_secs != cfg.delay_secs && !u.cfg_confirm_delay => {
+                u.cfg_confirm_delay = true;
+                u.cfg_msg = Some("配信ディレイを変えると、出力の映像が一度飛びます。よろしければもう一度「適用」を押してください".into());
+            }
             1 => match draft.save() {
                 Ok(()) => {
                     face.apply(&draft);
                     *cfg = draft;
+                    u.cfg_confirm_delay = false;
                     u.cfg_msg = Some(format!("保存しました（{}）", crate::config::config_path().display()));
                 }
                 Err(e) => u.cfg_msg = Some(e),

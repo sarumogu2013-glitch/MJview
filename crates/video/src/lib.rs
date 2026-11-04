@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 pub mod obs;
 
+use janscope_core::delay::FrameRing;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -88,7 +89,8 @@ pub struct JpegFrame {
 
 #[derive(Debug)]
 struct Shared {
-    latest: Option<JpegFrame>,
+    /// 配信ディレイ用に、最新から一定時間ぶんの JPEG を溜める
+    ring: FrameRing<JpegFrame>,
     status: StreamStatus,
     frames: u64,
     fps: f32,
@@ -109,7 +111,7 @@ pub const NO_SIGNAL_AFTER: Duration = Duration::from_secs(2);
 impl FaceStream {
     pub fn start(cfg: StreamConfig) -> Self {
         let shared = Arc::new(Mutex::new(Shared {
-            latest: None,
+            ring: FrameRing::new(Duration::from_secs(3)),
             status: StreamStatus::Starting,
             frames: 0,
             fps: 0.0,
@@ -132,17 +134,39 @@ impl FaceStream {
 
     /// 最新のフレーム（JPEG）。
     pub fn latest(&self) -> Option<JpegFrame> {
-        self.shared.lock().unwrap().latest.clone()
+        self.shared.lock().unwrap().ring.latest().map(|(_, f)| f)
     }
 
     pub fn status(&self) -> StreamStatus {
         let sh = self.shared.lock().unwrap();
-        match (&sh.status, &sh.latest) {
+        match (&sh.status, sh.ring.latest().map(|(_, f)| f)) {
             (StreamStatus::Live, Some(f)) if f.at.elapsed() > NO_SIGNAL_AFTER => {
                 StreamStatus::NoSignal
             }
             (s, _) => s.clone(),
         }
+    }
+
+    /// `target` 以前でいちばん新しいフレーム（配信ディレイ・同期補正用）。
+    pub fn frame_at(&self, target: Instant) -> Option<JpegFrame> {
+        self.shared
+            .lock()
+            .unwrap()
+            .ring
+            .at_or_before(target)
+            .map(|(_, f)| f)
+    }
+
+    /// 溜めておく長さ（ディレイ＋同期補正＋余裕）。
+    pub fn set_retain(&self, d: Duration) {
+        self.shared.lock().unwrap().ring.retain = d;
+    }
+
+    /// 溜めている JPEG の合計バイト数（メモリ使用量の目安）。
+    pub fn buffered_bytes(&self) -> usize {
+        let sh = self.shared.lock().unwrap();
+        let n = sh.ring.len();
+        sh.ring.latest().map(|(_, f)| f.data.len() * n).unwrap_or(0)
     }
 
     pub fn fps(&self) -> f32 {
@@ -228,11 +252,15 @@ fn run(
                 window_frames += 1;
                 got_any = true;
                 let mut sh = shared.lock().unwrap();
-                sh.latest = Some(JpegFrame {
-                    data: Arc::new(jpeg),
-                    at: Instant::now(),
-                    seq,
-                });
+                let now = Instant::now();
+                sh.ring.push(
+                    now,
+                    JpegFrame {
+                        data: Arc::new(jpeg),
+                        at: now,
+                        seq,
+                    },
+                );
                 sh.status = StreamStatus::Live;
                 sh.frames += 1;
                 let el = window_start.elapsed().as_secs_f32();

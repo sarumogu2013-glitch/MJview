@@ -119,7 +119,7 @@ fn win(
     }
 }
 
-pub fn install(mut table: ResMut<Table>) {
+pub fn install(mut table: ResMut<Table>, mut program: ResMut<crate::program::Program>) {
     let kind = std::env::var("JANSCOPE_DEMO").unwrap_or_else(|_| "hand".into());
     let (s, ov) = demo_state(&kind);
     table.link = Link::Connected;
@@ -129,7 +129,9 @@ pub fn install(mut table: ResMut<Table>) {
         can_undo: true,
         can_redo: false,
     });
-    table.overlays = ov.into_iter().map(|o| (0, o)).collect();
+    program.full = table.full.clone();
+    program.seq = 1;
+    program.overlays = ov.into_iter().map(|o| (0, o)).collect();
     table.changed = true;
 }
 

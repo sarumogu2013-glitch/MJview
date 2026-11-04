@@ -10,7 +10,7 @@ use janscope_video::obs::{ObsLink, ObsStatus};
 use janscope_video::{FaceStream, StreamConfig, StreamStatus, decode_rgba};
 
 use crate::config::{ClientConfig, FaceOutput};
-use crate::net::Table;
+use crate::program::Program;
 
 pub const FACE_W: u32 = 1066;
 pub const FACE_H: u32 = 600;
@@ -26,6 +26,8 @@ pub struct FaceRuntime {
     pub obs: Option<ObsLink>,
     pub current: SeatId,
     pub output: FaceOutput,
+    pub delay_secs: f64,
+    pub sync_offset_ms: [i32; 4],
 }
 
 impl FaceRuntime {
@@ -48,6 +50,8 @@ impl FaceRuntime {
     pub fn apply(&mut self, cfg: &ClientConfig) {
         self.sw.config = cfg.face_switch.clone();
         self.output = cfg.face_output;
+        self.delay_secs = cfg.delay_secs;
+        self.sync_offset_ms = cfg.sync_offset_ms;
         self.streams = std::array::from_fn(|i| {
             let f = &cfg.faces[i];
             (cfg.face_output == FaceOutput::Video && f.enabled && !f.url.trim().is_empty()).then(
@@ -63,6 +67,11 @@ impl FaceRuntime {
                 },
             )
         });
+        let max_off = cfg.sync_offset_ms.iter().copied().max().unwrap_or(0).max(0) as f64 / 1000.0;
+        let retain = std::time::Duration::from_secs_f64(cfg.delay_secs.max(0.0) + max_off + 3.0);
+        for s in self.streams.iter().flatten() {
+            s.set_retain(retain);
+        }
         self.has_frame = [false; 4];
         self.last_seq = [0; 4];
         self.obs = (cfg.face_output != FaceOutput::Video && cfg.obs.enabled)
@@ -98,13 +107,15 @@ pub fn setup_face(
         obs: None,
         current: SeatId(0),
         output: cfg.face_output,
+        delay_secs: cfg.delay_secs,
+        sync_offset_ms: cfg.sync_offset_ms,
     };
     rt.apply(&cfg);
     commands.insert_resource(rt);
 }
 
 /// 演出の出来事を切替のきっかけにする。
-pub fn face_triggers(table: &Table, rt: &mut FaceRuntime, overlays: &[(i64, Overlay)], now: f64) {
+pub fn face_triggers(table: &Program, rt: &mut FaceRuntime, overlays: &[(i64, Overlay)], now: f64) {
     let _ = table;
     for (_, o) in overlays {
         match o {
@@ -125,7 +136,7 @@ pub fn face_triggers(table: &Table, rt: &mut FaceRuntime, overlays: &[(i64, Over
 /// 毎フレーム: 映す席を決め、その席の最新の映像を画像に書き込み、OBS に反映する。
 pub fn face_update(
     time: Res<Time>,
-    table: Res<Table>,
+    table: Res<Program>,
     mut rt: ResMut<FaceRuntime>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -150,7 +161,14 @@ pub fn face_update(
     rt.current = cur;
     // 映している席の映像だけをデコードする（操作ウィンドウのプレビューは段階B8で足す）
     let i = cur.index();
-    if let Some(f) = rt.streams[i].as_ref().and_then(|s| s.latest()) {
+    // 配信ディレイ＋この席の同期補正だけ前の映像を出す
+    let back = std::time::Duration::from_secs_f64(
+        (rt.delay_secs + rt.sync_offset_ms[i] as f64 / 1000.0).max(0.0),
+    );
+    let target = std::time::Instant::now()
+        .checked_sub(back)
+        .unwrap_or_else(std::time::Instant::now);
+    if let Some(f) = rt.streams[i].as_ref().and_then(|s| s.frame_at(target)) {
         if f.seq != rt.last_seq[i] {
             rt.last_seq[i] = f.seq;
             match decode_rgba(&f.data) {

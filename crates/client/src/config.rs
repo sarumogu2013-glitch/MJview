@@ -48,6 +48,10 @@ pub struct ClientConfig {
     pub ffmpeg: String,
     pub face_switch: FaceSwitchConfig,
     pub obs: ObsConfig,
+    /// 配信ディレイ（秒）。出力ウィンドウ全体を遅らせる
+    pub delay_secs: f64,
+    /// 顔カメラごとの同期補正（ms、正の値でその映像をさらに遅らせる）
+    pub sync_offset_ms: [i32; 4],
 }
 
 impl Default for ClientConfig {
@@ -63,6 +67,8 @@ impl Default for ClientConfig {
             ffmpeg: default_ffmpeg(),
             face_switch: FaceSwitchConfig::default(),
             obs: ObsConfig::default(),
+            delay_secs: 0.0,
+            sync_offset_ms: [0; 4],
         }
     }
 }

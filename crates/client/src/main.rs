@@ -16,6 +16,7 @@ mod net;
 mod operator;
 mod output;
 mod player_screen;
+mod program;
 mod theme;
 mod ui_kit;
 
@@ -144,6 +145,8 @@ fn main() {
     .insert_resource(Role(role))
     .init_resource::<theme::Theme>()
     .init_resource::<net::Table>()
+    .init_resource::<program::Program>()
+    .init_resource::<program::Delayed>()
     .insert_resource(config::ClientConfig::load())
     .init_resource::<output::WinShow>()
     .init_resource::<output::OutputDirty>()
@@ -176,6 +179,7 @@ fn main() {
             .add_systems(
                 Update,
                 (
+                    program::release,
                     output::handle_overlays,
                     face::face_update,
                     output::rebuild_output,

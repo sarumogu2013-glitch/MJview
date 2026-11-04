@@ -3,7 +3,6 @@
 use std::sync::Mutex;
 
 use bevy::prelude::*;
-use janscope_core::engine::Overlay;
 use janscope_core::protocol::ClientRole;
 use janscope_core::scoring::{WinInput, WinScore};
 use janscope_core::state::Action;
@@ -54,7 +53,6 @@ pub struct Table {
     pub full: Option<FullView>,
     pub public: Option<PublicView>,
     /// 前回の描画から届いた演出の出来事（出力側で消費する）
-    pub overlays: Vec<(i64, Overlay)>,
     /// サーバー時刻 − 手元の時刻（ms）
     pub clock_offset_ms: i64,
     pub rtt_ms: i64,
@@ -78,7 +76,11 @@ impl Table {
     }
 }
 
-pub fn poll_net(net: Res<Net>, mut table: ResMut<Table>) {
+pub fn poll_net(
+    net: Res<Net>,
+    mut table: ResMut<Table>,
+    mut delayed: ResMut<crate::program::Delayed>,
+) {
     table.changed = false;
     let events = net.0.lock().unwrap().poll();
     for e in events {
@@ -107,8 +109,12 @@ pub fn poll_net(net: Res<Net>, mut table: ResMut<Table>) {
                     TableStateView::Full(f) => table.full = Some(*f),
                     TableStateView::Public(p) => table.public = Some(*p),
                 }
-                for o in overlays {
-                    table.overlays.push((at, o));
+                // 出力ウィンドウ用（配信ディレイの後に出す）
+                if let Some(f) = &table.full {
+                    delayed.push(crate::program::DelayedItem {
+                        full: f.clone(),
+                        overlays: overlays.into_iter().map(|o| (at, o)).collect(),
+                    });
                 }
                 table.last_by = by;
                 table.changed = true;

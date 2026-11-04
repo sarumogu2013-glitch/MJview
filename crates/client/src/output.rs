@@ -12,7 +12,7 @@ use janscope_core::tile::{SeatId, Tile};
 use crate::assets::{Fonts, TileImages};
 use crate::config::FaceOutput;
 use crate::face::FaceRuntime;
-use crate::net::Table;
+use crate::program::Program;
 use crate::theme::Theme;
 use crate::ui_kit::*;
 
@@ -53,7 +53,7 @@ pub struct OutputDirty {
 
 /// 演出の出来事を受けて、選手画面・アガリ演出を切り替える。
 pub fn handle_overlays(
-    mut table: ResMut<Table>,
+    mut table: ResMut<Program>,
     mut face: ResMut<FaceRuntime>,
     mut win: ResMut<WinShow>,
     time: Res<Time>,
@@ -93,7 +93,7 @@ pub fn handle_overlays(
 #[allow(clippy::too_many_arguments)]
 pub fn rebuild_output(
     mut commands: Commands,
-    table: Res<Table>,
+    table: Res<Program>,
     face: Res<FaceRuntime>,
     win: Res<WinShow>,
     mut dirty: ResMut<OutputDirty>,
