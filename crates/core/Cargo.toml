@@ -1,0 +1,13 @@
+[package]
+name = "janscope-core"
+description = "JanScope: 卓状態・ルール・点数計算・通信の型"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+mahc.workspace = true
