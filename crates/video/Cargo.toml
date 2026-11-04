@@ -1,0 +1,11 @@
+[package]
+name = "janscope-video"
+description = "JanScope 顔カメラの取り込み（FFmpeg を別プロセスで起動、MJPEG で受け取る）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+zune-jpeg = "0.5"
