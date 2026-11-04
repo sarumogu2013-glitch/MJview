@@ -10,6 +10,8 @@ use janscope_core::state::{HandOutcome, Phase, TableState, WinRecord};
 use janscope_core::tile::{SeatId, Tile};
 
 use crate::assets::{Fonts, TileImages};
+use crate::config::FaceOutput;
+use crate::face::FaceRuntime;
 use crate::net::Table;
 use crate::theme::Theme;
 use crate::ui_kit::*;
@@ -20,27 +22,6 @@ pub struct OutputCamera;
 
 #[derive(Component)]
 pub struct OutputRoot;
-
-/// 選手画面に映す選手（設計書 4.7 の簡易版。優先順位・最短表示時間などは段階B6で入れる）。
-#[derive(Resource, Default)]
-pub struct FaceSelect {
-    /// 手動で選んだ席（None = 自動）
-    pub manual: Option<SeatId>,
-    /// 自動切替のきっかけ（席、表示を終える時刻[秒]）
-    pub trigger: Option<(SeatId, f64)>,
-}
-
-impl FaceSelect {
-    pub fn current(&self, s: &TableState, now: f64) -> SeatId {
-        if let Some(m) = self.manual {
-            return m;
-        }
-        match self.trigger {
-            Some((seat, until)) if now < until => seat,
-            _ => s.dealer(),
-        }
-    }
-}
 
 /// アガリ演出の表示（設計書 4.2「アガリ演出」の簡易版）。
 #[derive(Resource, Default)]
@@ -73,33 +54,37 @@ pub struct OutputDirty {
 /// 演出の出来事を受けて、選手画面・アガリ演出を切り替える。
 pub fn handle_overlays(
     mut table: ResMut<Table>,
-    mut face: ResMut<FaceSelect>,
+    mut face: ResMut<FaceRuntime>,
     mut win: ResMut<WinShow>,
     time: Res<Time>,
 ) {
     let now = time.elapsed_secs_f64();
     let overlays: Vec<_> = table.overlays.drain(..).collect();
+    crate::face::face_triggers(&table, &mut face, &overlays, now);
+    // アガリ演出は選手画面のアガリ表示と同じ秒数で、アガった人ごとに順に出す
+    let per = face
+        .sw
+        .config
+        .triggers
+        .iter()
+        .find(|t| t.kind == janscope_core::face::TriggerKind::Win)
+        .map(|t| t.secs)
+        .unwrap_or(10.0)
+        .max(3.0);
     for (_, o) in overlays {
         match o {
-            Overlay::Riichi { seat } => face.trigger = Some((seat, now + 10.0)),
             Overlay::Win { .. } => {
                 if let Some(st) = table.full.as_ref().map(|f| &f.state) {
                     if let Some(h) = st.history.last() {
                         if let HandOutcome::Win(rs) = &h.outcome {
                             win.records = rs.clone();
                             win.started = now;
-                            win.per = 10.0;
-                            if let Some(r) = rs.first() {
-                                face.trigger = Some((r.input.winner, now + 10.0 * rs.len() as f64));
-                            }
+                            win.per = per;
                         }
                     }
                 }
             }
-            Overlay::HandStarted | Overlay::GameStarted => {
-                win.records.clear();
-                face.trigger = None;
-            }
+            Overlay::HandStarted | Overlay::GameStarted => win.records.clear(),
             _ => {}
         }
     }
@@ -109,7 +94,7 @@ pub fn handle_overlays(
 pub fn rebuild_output(
     mut commands: Commands,
     table: Res<Table>,
-    face: Res<FaceSelect>,
+    face: Res<FaceRuntime>,
     win: Res<WinShow>,
     mut dirty: ResMut<OutputDirty>,
     roots: Query<Entity, With<OutputRoot>>,
@@ -124,12 +109,14 @@ pub fn rebuild_output(
     };
     let now = time.elapsed_secs_f64();
     let st = table.full.as_ref().map(|f| &f.state);
-    let face_seat = st.map(|s| face.current(s, now));
+    let face_seat = st.map(|_| face.current);
+    let live = face_seat.is_some_and(|f| face.live(f));
     let showing = win.current(now).map(|r| r.input.winner);
     let key = format!(
         "{}|{:?}|{:?}|{:?}",
         table.seq,
         face_seat,
+        (live, face.output),
         showing,
         table.full.is_some()
     );
@@ -171,7 +158,7 @@ pub fn rebuild_output(
             }
             Some(s) => {
                 let face_seat = face_seat.unwrap();
-                draw_face(p, &kit, s, face_seat);
+                draw_face(p, &kit, s, face_seat, &face);
                 draw_round(p, &kit, s);
                 draw_scores(p, &kit, s, face_seat);
                 draw_dice(p, &kit, s);
