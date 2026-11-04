@@ -9,7 +9,9 @@
 //! 開発用: `--demo` でサーバーなしの見本の状態を表示、`--screenshot <png>` で出力を保存して終了。
 
 mod assets;
+mod config;
 mod demo;
+mod face;
 mod net;
 mod operator;
 mod output;
@@ -142,7 +144,7 @@ fn main() {
     .insert_resource(Role(role))
     .init_resource::<theme::Theme>()
     .init_resource::<net::Table>()
-    .init_resource::<output::FaceSelect>()
+    .insert_resource(config::ClientConfig::load())
     .init_resource::<output::WinShow>()
     .init_resource::<output::OutputDirty>()
     .init_resource::<player_screen::PlayerScreenConfig>()
@@ -164,6 +166,7 @@ fn main() {
     } else {
         app.add_plugins(EguiPlugin::default())
             .init_resource::<operator::OperatorUi>()
+            .add_systems(Startup, face::setup_face)
             .add_systems(
                 Startup,
                 move |c: Commands, s: ResMut<EguiGlobalSettings>| {
@@ -172,7 +175,12 @@ fn main() {
             )
             .add_systems(
                 Update,
-                (output::handle_overlays, output::rebuild_output).chain(),
+                (
+                    output::handle_overlays,
+                    face::face_update,
+                    output::rebuild_output,
+                )
+                    .chain(),
             );
         app.add_systems(EguiPrimaryContextPass, operator::operator_ui);
     }

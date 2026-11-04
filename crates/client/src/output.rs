@@ -113,7 +113,7 @@ pub fn rebuild_output(
     let live = face_seat.is_some_and(|f| face.live(f));
     let showing = win.current(now).map(|r| r.input.winner);
     let key = format!(
-        "{}|{:?}|{:?}|{:?}",
+        "{}|{:?}|{:?}|{:?}|{:?}",
         table.seq,
         face_seat,
         (live, face.output),
@@ -179,14 +179,59 @@ fn wind_dealer(s: &TableState, seat: SeatId) -> (String, bool) {
     (s.seat_wind(seat).name_ja().to_string(), s.dealer() == seat)
 }
 
-fn draw_face(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId) {
+fn draw_face(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId, rt: &FaceRuntime) {
     let th = k.theme;
-    p.spawn((abs(0.0, 0.0, 1066.0, 600.0), BackgroundColor(th.face_bg)))
+    let bg = match rt.output {
+        FaceOutput::Chroma => Color::srgb(0.0, 1.0, 0.0),
+        _ => th.face_bg,
+    };
+    p.spawn((abs(0.0, 0.0, 1066.0, 600.0), BackgroundColor(bg)))
         .with_children(|q| {
-            q.spawn(center(abs(0.0, 0.0, 1066.0, 510.0)))
-                .with_children(|c| {
-                    k.text(c, "顔カメラ", 36.0, Color::srgb(0.25, 0.27, 0.30), false);
-                });
+            match rt.output {
+                FaceOutput::Video if rt.live(seat) => {
+                    q.spawn((
+                        abs(0.0, 0.0, 1066.0, 600.0),
+                        ImageNode {
+                            image: rt.images[seat.index()].clone(),
+                            ..default()
+                        },
+                    ));
+                }
+                FaceOutput::Video => {
+                    // 信号なし: 選手名入りの代替表示
+                    q.spawn(center(abs(0.0, 0.0, 1066.0, 510.0)))
+                        .with_children(|c| {
+                            c.spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            })
+                            .with_children(|col| {
+                                let configured = rt.status(seat).is_some();
+                                k.text(
+                                    col,
+                                    if configured {
+                                        "NO SIGNAL"
+                                    } else {
+                                        "顔カメラ"
+                                    },
+                                    40.0,
+                                    Color::srgb(0.35, 0.37, 0.40),
+                                    true,
+                                );
+                                k.text(
+                                    col,
+                                    s.seats[seat.index()].player.name.clone(),
+                                    32.0,
+                                    Color::srgb(0.30, 0.32, 0.35),
+                                    false,
+                                );
+                            });
+                        });
+                }
+                // 黒枠・クロマキー: 何も描かない（OBS 側で顔映像を重ねる）
+                _ => {}
+            }
             q.spawn((
                 row(abs(0.0, 510.0, 1066.0, 90.0), 24.0),
                 BackgroundColor(th.band),

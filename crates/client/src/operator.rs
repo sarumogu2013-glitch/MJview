@@ -13,8 +13,14 @@ use janscope_core::state::{AbortiveKind, Action, DrawKind, KanKind, Phase, Playe
 use janscope_core::tile::{SeatId, Tile, Wind};
 
 use crate::assets::TileImages;
+use crate::config::{ClientConfig, FaceOutput};
+use crate::face::FaceRuntime;
 use crate::net::{Link, Net, Table};
-use crate::output::{FaceSelect, WinShow};
+use crate::output::WinShow;
+use janscope_core::face::{FaceMode, IdleMode, ManualBehavior};
+use janscope_video::RtmpMode;
+use janscope_video::StreamStatus;
+use janscope_video::obs::{ObsStatus, ObsSwitchMode};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PaletteTarget {
@@ -69,6 +75,9 @@ pub struct OperatorUi {
     pending: Vec<WinInput>,
     preview_id: Option<u64>,
     confirm_end: bool,
+    // 顔カメラ・OBS・切替の設定（編集中の下書き）
+    cfg_draft: Option<ClientConfig>,
+    cfg_msg: Option<String>,
 }
 
 impl Default for OperatorUi {
@@ -101,6 +110,8 @@ impl Default for OperatorUi {
             pending: vec![],
             preview_id: None,
             confirm_end: false,
+            cfg_draft: None,
+            cfg_msg: None,
         }
     }
 }
@@ -164,7 +175,9 @@ pub fn operator_ui(
     mut table: ResMut<Table>,
     net: Res<Net>,
     tiles: Option<Res<TileImages>>,
-    mut face: ResMut<FaceSelect>,
+    mut face: ResMut<FaceRuntime>,
+    mut cfg: ResMut<ClientConfig>,
+    time: Res<Time>,
     mut win_show: ResMut<WinShow>,
     keys: Res<ButtonInput<KeyCode>>,
     role: Res<crate::Role>,
@@ -205,11 +218,11 @@ pub fn operator_ui(
             .enumerate()
         {
             if keys.just_pressed(*k) {
-                face.manual = Some(SeatId(i as u8));
+                face.sw.manual(SeatId(i as u8), time.elapsed_secs_f64());
             }
         }
         if keys.just_pressed(KeyCode::F5) {
-            face.manual = None;
+            face.sw.auto(time.elapsed_secs_f64());
         }
     }
 
@@ -351,7 +364,7 @@ pub fn operator_ui(
             ui.label("選手画面（F1〜F4 で手動、F5 で自動）");
             ui.horizontal(|ui| {
                 for seat in SeatId::ALL {
-                    let sel = face.manual == Some(seat);
+                    let sel = face.current == seat && !matches!(face.sw.mode(), FaceMode::Auto);
                     if ui
                         .selectable_label(
                             sel,
@@ -359,13 +372,33 @@ pub fn operator_ui(
                         )
                         .clicked()
                     {
-                        face.manual = Some(seat);
+                        face.sw.manual(seat, time.elapsed_secs_f64());
                     }
                 }
-                if ui.selectable_label(face.manual.is_none(), "自動").clicked() {
-                    face.manual = None;
+                if ui
+                    .selectable_label(matches!(face.sw.mode(), FaceMode::Auto), "自動")
+                    .clicked()
+                {
+                    face.sw.auto(time.elapsed_secs_f64());
                 }
             });
+            let now = time.elapsed_secs_f64();
+            let mode = match face.sw.mode() {
+                FaceMode::Auto => "自動".to_string(),
+                FaceMode::TempManual { .. } => "一時手動".to_string(),
+                FaceMode::LockedManual { .. } => "手動固定".to_string(),
+            };
+            let rest = face
+                .sw
+                .remaining(now)
+                .map(|r| format!("、次の切替まで {:.0}秒", r))
+                .unwrap_or_default();
+            ui.label(format!(
+                "いま: {} {}（{mode}{rest}）",
+                face.current.label(),
+                state.seats[face.current.index()].player.name
+            ));
+            face_settings_panel(ui, u, &mut cfg, &mut face);
             if !win_show.records.is_empty() && ui.button("アガリ演出を閉じる").clicked() {
                 win_show.records.clear();
             }
@@ -1106,5 +1139,178 @@ fn fix_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableStat
                 });
             }
         });
+    });
+}
+
+fn stream_status_text(s: Option<StreamStatus>) -> (String, egui::Color32) {
+    match s {
+        None => ("使わない".into(), egui::Color32::GRAY),
+        Some(StreamStatus::Starting) => ("待機中".into(), egui::Color32::YELLOW),
+        Some(StreamStatus::Live) => ("受信中".into(), egui::Color32::LIGHT_GREEN),
+        Some(StreamStatus::NoSignal) => ("信号なし".into(), egui::Color32::from_rgb(255, 140, 100)),
+        Some(StreamStatus::Failed(e)) => (format!("失敗: {e}"), egui::Color32::RED),
+    }
+}
+
+/// 顔カメラ・OBS 連携・選手画面の切替の設定（設計書 4.6 の映像入力・役割割り当て・切替タブの一部。全タブは段階B8）。
+fn face_settings_panel(
+    ui: &mut egui::Ui,
+    u: &mut OperatorUi,
+    cfg: &mut ClientConfig,
+    face: &mut FaceRuntime,
+) {
+    ui.collapsing("顔カメラ・OBS 連携・切替の設定", |ui| {
+        let d = u.cfg_draft.get_or_insert_with(|| cfg.clone());
+        ui.label("選手画面の映像");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut d.face_output, FaceOutput::Video, "顔カメラを取り込む（RTMP）")
+                .on_hover_text("別の配信元から RTMP で送られてくる顔カメラの映像を、このソフトで受けて表示します");
+            ui.radio_value(&mut d.face_output, FaceOutput::Black, "黒枠（OBS で重ねる）");
+            ui.radio_value(&mut d.face_output, FaceOutput::Chroma, "クロマキー（緑）");
+        });
+        if d.face_output == FaceOutput::Video {
+            egui::Grid::new("faces").striped(true).show(ui, |ui| {
+                ui.label("席");
+                ui.label("使う");
+                ui.label("受け方");
+                ui.label("URL");
+                ui.label("状態");
+                ui.end_row();
+                for i in 0..4 {
+                    let f = &mut d.faces[i];
+                    ui.label(SeatId(i as u8).label().to_string());
+                    ui.checkbox(&mut f.enabled, "");
+                    egui::ComboBox::from_id_salt(format!("rtmp_mode{i}"))
+                        .selected_text(if f.mode == RtmpMode::Listen { "待ち受け" } else { "引っ張る" })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut f.mode, RtmpMode::Listen, "待ち受け")
+                                .on_hover_text("配信元から rtmp://このPCのIP:1935/live/... に送ってもらう");
+                            ui.selectable_value(&mut f.mode, RtmpMode::Pull, "引っ張る")
+                                .on_hover_text("配信元のサーバーの rtmp://... から受け取る");
+                        });
+                    ui.add(egui::TextEdit::singleline(&mut f.url).desired_width(320.0));
+                    let (t, c) = stream_status_text(face.status(SeatId(i as u8)));
+                    ui.colored_label(c, t);
+                    ui.end_row();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("ffmpeg");
+                ui.add(egui::TextEdit::singleline(&mut d.ffmpeg).desired_width(360.0))
+                    .on_hover_text("ffmpeg の実行ファイル。LGPL ビルドを使ってください");
+            });
+        } else {
+            ui.checkbox(&mut d.obs.enabled, "切替の結果を OBS に反映する（obs-websocket）");
+            if d.obs.enabled {
+                ui.horizontal(|ui| {
+                    ui.label("接続先");
+                    ui.text_edit_singleline(&mut d.obs.url);
+                    ui.label("パスワード");
+                    ui.add(egui::TextEdit::singleline(&mut d.obs.password).password(true).desired_width(140.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut d.obs.mode, ObsSwitchMode::Scene, "シーンを切り替える");
+                    ui.radio_value(&mut d.obs.mode, ObsSwitchMode::SourceVisibility, "ソースの表示を切り替える");
+                });
+                egui::Grid::new("obs_names").show(ui, |ui| {
+                    if d.obs.mode == ObsSwitchMode::SourceVisibility {
+                        ui.label("シーン");
+                        ui.text_edit_singleline(&mut d.obs.source_scene);
+                        ui.end_row();
+                    }
+                    for i in 0..4 {
+                        ui.label(format!("席{}", SeatId(i as u8).label()));
+                        if d.obs.mode == ObsSwitchMode::Scene {
+                            ui.text_edit_singleline(&mut d.obs.scenes[i]);
+                        } else {
+                            ui.text_edit_singleline(&mut d.obs.sources[i]);
+                        }
+                        ui.end_row();
+                    }
+                });
+                let (t, c) = match face.obs_status() {
+                    ObsStatus::Disabled => ("未接続".to_string(), egui::Color32::GRAY),
+                    ObsStatus::Connecting => ("接続しています".to_string(), egui::Color32::YELLOW),
+                    ObsStatus::Connected { obs_version } => (format!("接続中（obs-websocket {obs_version}）"), egui::Color32::LIGHT_GREEN),
+                    ObsStatus::Error(e) => (e, egui::Color32::from_rgb(255, 140, 100)),
+                };
+                ui.colored_label(c, t);
+            }
+        }
+        ui.separator();
+        ui.label("選手画面の切替");
+        let fs = &mut d.face_switch;
+        ui.horizontal(|ui| {
+            ui.label("手動で選んだとき");
+            ui.radio_value(&mut fs.manual_behavior, ManualBehavior::Temporary, "一時手動");
+            ui.radio_value(&mut fs.manual_behavior, ManualBehavior::Locked, "手動固定");
+            if fs.manual_behavior == ManualBehavior::Temporary {
+                ui.add(egui::DragValue::new(&mut fs.temp_manual_secs).range(3.0..=600.0).suffix("秒で自動へ"));
+            }
+        });
+        ui.label("自動切替のきっかけ（上ほど優先）");
+        let mut swap = None;
+        let n = fs.triggers.len();
+        for (i, t) in fs.triggers.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut t.enabled, t.kind.name_ja());
+                ui.add(egui::DragValue::new(&mut t.secs).range(1.0..=120.0).suffix("秒"));
+                if i > 0 && ui.small_button("上へ").clicked() {
+                    swap = Some(i);
+                }
+                if i + 1 < n && ui.small_button("下へ").clicked() {
+                    swap = Some(i + 1);
+                }
+            });
+        }
+        if let Some(i) = swap {
+            fs.triggers.swap(i - 1, i);
+        }
+        ui.horizontal(|ui| {
+            ui.label("それ以外のとき");
+            ui.radio_value(&mut fs.idle, IdleMode::Rotate, "巡回");
+            ui.radio_value(&mut fs.idle, IdleMode::Dealer, "親を表示");
+            if fs.idle == IdleMode::Rotate {
+                ui.add(egui::DragValue::new(&mut fs.rotate_secs).range(3.0..=300.0).suffix("秒ごと"));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("最短表示時間");
+            ui.add(egui::DragValue::new(&mut fs.min_display_secs).range(0.0..=60.0).suffix("秒"))
+                .on_hover_text("切替直後は、より優先度の高いきっかけ以外では切り替えません（画面がチカチカしないため）");
+        });
+        // 0: なし 1: 適用 2: キャンセル 3: 既定値
+        let mut act = 0u8;
+        ui.horizontal(|ui| {
+            if ui.button("適用（保存）").clicked() {
+                act = 1;
+            }
+            if ui.button("キャンセル").clicked() {
+                act = 2;
+            }
+            if ui.button("既定値に戻す").clicked() {
+                act = 3;
+            }
+        });
+        let draft = d.clone();
+        match act {
+            1 => match draft.save() {
+                Ok(()) => {
+                    face.apply(&draft);
+                    *cfg = draft;
+                    u.cfg_msg = Some(format!("保存しました（{}）", crate::config::config_path().display()));
+                }
+                Err(e) => u.cfg_msg = Some(e),
+            },
+            2 => {
+                u.cfg_draft = None;
+                u.cfg_msg = None;
+            }
+            3 => u.cfg_draft = Some(ClientConfig::default()),
+            _ => {}
+        }
+        if let Some(m) = &u.cfg_msg {
+            ui.label(m.clone());
+        }
     });
 }

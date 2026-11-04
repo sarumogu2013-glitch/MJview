@@ -3004,6 +3004,7 @@ dependencies = [
  "bevy_egui",
  "janscope-core",
  "janscope-netclient",
+ "janscope-video",
  "resvg",
  "serde",
  "serde_json",

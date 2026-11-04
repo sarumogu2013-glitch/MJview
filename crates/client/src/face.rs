@@ -38,7 +38,10 @@ impl FaceRuntime {
     }
 
     pub fn obs_status(&self) -> ObsStatus {
-        self.obs.as_ref().map(|o| o.status()).unwrap_or(ObsStatus::Disabled)
+        self.obs
+            .as_ref()
+            .map(|o| o.status())
+            .unwrap_or(ObsStatus::Disabled)
     }
 
     /// 設定を反映する（顔カメラの取り込みと OBS 連携を起動し直す）。
@@ -47,27 +50,38 @@ impl FaceRuntime {
         self.output = cfg.face_output;
         self.streams = std::array::from_fn(|i| {
             let f = &cfg.faces[i];
-            (cfg.face_output == FaceOutput::Video && f.enabled && !f.url.trim().is_empty()).then(|| {
-                FaceStream::start(StreamConfig {
-                    url: f.url.trim().to_string(),
-                    mode: f.mode,
-                    width: FACE_W,
-                    height: FACE_H,
-                    fps: 30,
-                    ffmpeg: cfg.ffmpeg.clone(),
-                })
-            })
+            (cfg.face_output == FaceOutput::Video && f.enabled && !f.url.trim().is_empty()).then(
+                || {
+                    FaceStream::start(StreamConfig {
+                        url: f.url.trim().to_string(),
+                        mode: f.mode,
+                        width: FACE_W,
+                        height: FACE_H,
+                        fps: 30,
+                        ffmpeg: cfg.ffmpeg.clone(),
+                    })
+                },
+            )
         });
         self.has_frame = [false; 4];
         self.last_seq = [0; 4];
-        self.obs = (cfg.face_output != FaceOutput::Video && cfg.obs.enabled).then(|| ObsLink::start(cfg.obs.clone()));
+        self.obs = (cfg.face_output != FaceOutput::Video && cfg.obs.enabled)
+            .then(|| ObsLink::start(cfg.obs.clone()));
     }
 }
 
-pub fn setup_face(mut commands: Commands, mut images: ResMut<Assets<Image>>, cfg: Res<ClientConfig>) {
+pub fn setup_face(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    cfg: Res<ClientConfig>,
+) {
     let make = || {
         Image::new_fill(
-            Extent3d { width: FACE_W, height: FACE_H, depth_or_array_layers: 1 },
+            Extent3d {
+                width: FACE_W,
+                height: FACE_H,
+                depth_or_array_layers: 1,
+            },
             TextureDimension::D2,
             &[0, 0, 0, 255],
             TextureFormat::Rgba8UnormSrgb,
@@ -109,15 +123,26 @@ pub fn face_triggers(table: &Table, rt: &mut FaceRuntime, overlays: &[(i64, Over
 }
 
 /// 毎フレーム: 映す席を決め、その席の最新の映像を画像に書き込み、OBS に反映する。
-pub fn face_update(time: Res<Time>, table: Res<Table>, mut rt: ResMut<FaceRuntime>, mut images: ResMut<Assets<Image>>) {
+pub fn face_update(
+    time: Res<Time>,
+    table: Res<Table>,
+    mut rt: ResMut<FaceRuntime>,
+    mut images: ResMut<Assets<Image>>,
+) {
     let now = time.elapsed_secs_f64();
-    let dealer = table.full.as_ref().map(|f| f.state.dealer()).unwrap_or(SeatId(0));
+    let dealer = table
+        .full
+        .as_ref()
+        .map(|f| f.state.dealer())
+        .unwrap_or(SeatId(0));
     let any_stream = rt.streams.iter().any(|s| s.is_some());
     let has_signal: [bool; 4] = std::array::from_fn(|i| {
         if rt.output != FaceOutput::Video || !any_stream {
             true
         } else {
-            rt.streams[i].as_ref().is_some_and(|s| s.status() == StreamStatus::Live)
+            rt.streams[i]
+                .as_ref()
+                .is_some_and(|s| s.status() == StreamStatus::Live)
         }
     });
     let ctx = FaceContext { dealer, has_signal };
@@ -130,7 +155,7 @@ pub fn face_update(time: Res<Time>, table: Res<Table>, mut rt: ResMut<FaceRuntim
             rt.last_seq[i] = f.seq;
             match decode_rgba(&f.data) {
                 Ok((w, h, px)) if w == FACE_W && h == FACE_H => {
-                    if let Some(img) = images.get_mut(&rt.images[i]) {
+                    if let Some(mut img) = images.get_mut(&rt.images[i]) {
                         img.data = Some(px);
                         rt.has_frame[i] = true;
                     }

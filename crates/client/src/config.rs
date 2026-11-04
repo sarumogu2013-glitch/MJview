@@ -30,7 +30,11 @@ pub struct FaceSource {
 
 impl Default for FaceSource {
     fn default() -> Self {
-        FaceSource { enabled: false, url: String::new(), mode: RtmpMode::Pull }
+        FaceSource {
+            enabled: false,
+            url: String::new(),
+            mode: RtmpMode::Pull,
+        }
     }
 }
 
@@ -65,7 +69,11 @@ impl Default for ClientConfig {
 
 /// 実行ファイルの隣の ffmpeg/ffmpeg(.exe) があればそれ、なければ PATH の ffmpeg。
 fn default_ffmpeg() -> String {
-    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
             let p = d.join("ffmpeg").join(name);
@@ -78,7 +86,9 @@ fn default_ffmpeg() -> String {
 }
 
 pub fn config_path() -> PathBuf {
-    std::env::var("JANSCOPE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("janscope-client.json"))
+    std::env::var("JANSCOPE_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("janscope-client.json"))
 }
 
 impl ClientConfig {
@@ -86,7 +96,10 @@ impl ClientConfig {
         let p = config_path();
         match std::fs::read_to_string(&p) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-                warn!("設定ファイル {} が読めないので既定値を使います: {e}", p.display());
+                warn!(
+                    "設定ファイル {} が読めないので既定値を使います: {e}",
+                    p.display()
+                );
                 Self::default()
             }),
             Err(_) => Self::default(),

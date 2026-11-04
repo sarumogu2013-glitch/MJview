@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 janscope-core.workspace = true
 janscope-netclient.workspace = true
+janscope-video.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bevy = { version = "=0.20.1", default-features = false, features = [

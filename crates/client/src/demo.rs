@@ -149,7 +149,12 @@ pub fn take_screenshot(
     mut exit: MessageWriter<AppExit>,
 ) {
     task.frames += 1;
-    if !task.done && task.frames == 90 {
+    // JANSCOPE_SHOT_FRAMES で保存までのフレーム数を変えられる（映像の入力待ちなど）
+    let at: u32 = std::env::var("JANSCOPE_SHOT_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90);
+    if !task.done && task.frames == at {
         let target = cams.iter().next().and_then(|t| match t {
             bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Entity(e)) => Some(*e),
             _ => None,
@@ -168,10 +173,10 @@ pub fn take_screenshot(
             task.done = true;
         }
     }
-    if task.done && task.frames > 90 && std::path::Path::new(&task.path).exists() {
+    if task.done && task.frames > at && std::path::Path::new(&task.path).exists() {
         exit.write(AppExit::Success);
     }
-    if task.frames > 600 {
+    if task.frames > at + 600 {
         error!("画面を保存できませんでした");
         exit.write(AppExit::error());
     }
