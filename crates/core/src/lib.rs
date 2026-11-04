@@ -3,6 +3,7 @@
 //! サーバー（処理サーバー）とクライアント（配信・入力担当・選手用画面）の両方が使う。描画や通信の実装は持たない。
 
 pub mod engine;
+pub mod face;
 pub mod log;
 pub mod protocol;
 pub mod rules;
