@@ -79,6 +79,8 @@ pub struct OperatorUi {
     cfg_draft: Option<ClientConfig>,
     cfg_msg: Option<String>,
     cfg_confirm_delay: bool,
+    telop_edit: String,
+    fullscreen_seat: u8,
 }
 
 impl Default for OperatorUi {
@@ -114,6 +116,8 @@ impl Default for OperatorUi {
             cfg_draft: None,
             cfg_msg: None,
             cfg_confirm_delay: false,
+            telop_edit: String::new(),
+            fullscreen_seat: 0,
         }
     }
 }
@@ -183,6 +187,7 @@ pub fn operator_ui(
     mut win_show: ResMut<WinShow>,
     keys: Res<ButtonInput<KeyCode>>,
     role: Res<crate::Role>,
+    mut scenes: ResMut<crate::scenes::Scenes>,
 ) -> Result {
     let Some(tiles) = tiles else { return Ok(()) };
     if ui_state.tex.is_empty() {
@@ -449,7 +454,12 @@ pub fn operator_ui(
             });
         });
 
+    let now = time.elapsed_secs_f64();
     egui::CentralPanel::default().show(&mut root, |ui| {
+        if role.0 == janscope_core::protocol::ClientRole::Broadcast {
+            scene_panel(ui, u, &mut scenes, &state, now);
+            ui.separator();
+        }
         egui::ScrollArea::vertical().show(ui, |ui| match state.phase {
             Phase::Setup | Phase::GameOver => setup_panel(ui, u, &net, &state),
             Phase::BetweenHands => {
@@ -1351,5 +1361,101 @@ fn face_settings_panel(
         if let Some(m) = &u.cfg_msg {
             ui.label(m.clone());
         }
+    });
+}
+
+/// シーン切替（設計書 4.4 映像エリア: PVW で選んで「切替」で PGM へ）とテロップ。
+fn scene_panel(
+    ui: &mut egui::Ui,
+    u: &mut OperatorUi,
+    sc: &mut crate::scenes::Scenes,
+    state: &TableState,
+    now: f64,
+) {
+    use janscope_core::scene::{SceneKind, TransitionKind};
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("放送中: {}", sc.sw.program.name_ja()))
+                .strong()
+                .color(egui::Color32::from_rgb(255, 120, 120)),
+        );
+        ui.separator();
+        ui.label("プレビュー:");
+        let fs = SceneKind::Fullscreen(SeatId(u.fullscreen_seat));
+        for k in [
+            SceneKind::Game,
+            fs,
+            SceneKind::PlayerIntro,
+            SceneKind::Waiting,
+            SceneKind::FinalResult,
+        ] {
+            let label = match k {
+                SceneKind::Fullscreen(_) => "全画面映像".to_string(),
+                _ => k.name_ja(),
+            };
+            let sel = std::mem::discriminant(&sc.sw.preview) == std::mem::discriminant(&k);
+            if ui.selectable_label(sel, label).clicked() {
+                sc.sw.preview = k;
+            }
+        }
+        if matches!(sc.sw.preview, SceneKind::Fullscreen(_)) {
+            egui::ComboBox::from_id_salt("fs_seat")
+                .selected_text(seat_name(state, SeatId(u.fullscreen_seat)))
+                .show_ui(ui, |ui| {
+                    for s in SeatId::ALL {
+                        if ui
+                            .selectable_value(&mut u.fullscreen_seat, s.0, seat_name(state, s))
+                            .clicked()
+                        {
+                            sc.sw.preview = SceneKind::Fullscreen(s);
+                        }
+                    }
+                });
+        }
+    });
+    ui.horizontal(|ui| {
+        for t in [
+            TransitionKind::Cut,
+            TransitionKind::Fade,
+            TransitionKind::Wipe,
+        ] {
+            ui.radio_value(&mut sc.sw.transition, t, t.name_ja());
+        }
+        if sc.sw.transition != TransitionKind::Cut {
+            ui.add(
+                egui::DragValue::new(&mut sc.sw.duration)
+                    .range(0.1..=5.0)
+                    .speed(0.05)
+                    .suffix("秒"),
+            );
+        }
+        let can = sc.sw.preview != sc.sw.program && !sc.sw.in_transition();
+        if ui
+            .add_enabled(
+                can,
+                egui::Button::new(egui::RichText::new("切替（TAKE）").size(20.0).strong()),
+            )
+            .clicked()
+        {
+            sc.take(now);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("テロップ");
+        ui.add(egui::TextEdit::singleline(&mut u.telop_edit).desired_width(420.0));
+        if ui.button("表示").clicked() && !u.telop_edit.trim().is_empty() {
+            sc.telop = Some(u.telop_edit.trim().to_string());
+            crate::scenes::video_log(&format!("テロップ表示 {}", u.telop_edit.trim()));
+        }
+        if ui
+            .add_enabled(sc.telop.is_some(), egui::Button::new("消す"))
+            .clicked()
+        {
+            sc.telop = None;
+            crate::scenes::video_log("テロップ消去");
+        }
+        ui.separator();
+        ui.label("待機画面の文字");
+        ui.add(egui::TextEdit::singleline(&mut sc.waiting_text).desired_width(240.0));
     });
 }

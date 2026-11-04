@@ -119,7 +119,23 @@ fn win(
     }
 }
 
-pub fn install(mut table: ResMut<Table>, mut program: ResMut<crate::program::Program>) {
+pub fn install(
+    mut table: ResMut<Table>,
+    mut program: ResMut<crate::program::Program>,
+    mut scenes: ResMut<crate::scenes::Scenes>,
+) {
+    // JANSCOPE_SCENE で最初に放送するシーンを選ぶ（確認用）
+    use janscope_core::scene::SceneKind;
+    scenes.sw.program = match std::env::var("JANSCOPE_SCENE").as_deref() {
+        Ok("intro") => SceneKind::PlayerIntro,
+        Ok("waiting") => SceneKind::Waiting,
+        Ok("final") => SceneKind::FinalResult,
+        Ok("fullscreen") => SceneKind::Fullscreen(janscope_core::tile::SeatId(3)),
+        _ => SceneKind::Game,
+    };
+    if let Ok(t) = std::env::var("JANSCOPE_TELOP") {
+        scenes.telop = Some(t);
+    }
     let kind = std::env::var("JANSCOPE_DEMO").unwrap_or_else(|_| "hand".into());
     let (s, ov) = demo_state(&kind);
     table.link = Link::Connected;

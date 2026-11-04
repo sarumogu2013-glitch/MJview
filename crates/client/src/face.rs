@@ -139,6 +139,7 @@ pub fn face_update(
     table: Res<Program>,
     mut rt: ResMut<FaceRuntime>,
     mut images: ResMut<Assets<Image>>,
+    scenes: Res<crate::scenes::Scenes>,
 ) {
     let now = time.elapsed_secs_f64();
     let dealer = table
@@ -159,28 +160,38 @@ pub fn face_update(
     let ctx = FaceContext { dealer, has_signal };
     let cur = rt.sw.update(now, &ctx);
     rt.current = cur;
-    // 映している席の映像だけをデコードする（操作ウィンドウのプレビューは段階B8で足す）
-    let i = cur.index();
-    // 配信ディレイ＋この席の同期補正だけ前の映像を出す
-    let back = std::time::Duration::from_secs_f64(
-        (rt.delay_secs + rt.sync_offset_ms[i] as f64 / 1000.0).max(0.0),
-    );
-    let target = std::time::Instant::now()
-        .checked_sub(back)
-        .unwrap_or_else(std::time::Instant::now);
-    if let Some(f) = rt.streams[i].as_ref().and_then(|s| s.frame_at(target)) {
-        if f.seq != rt.last_seq[i] {
-            rt.last_seq[i] = f.seq;
-            match decode_rgba(&f.data) {
-                Ok((w, h, px)) if w == FACE_W && h == FACE_H => {
-                    if let Some(mut img) = images.get_mut(&rt.images[i]) {
-                        img.data = Some(px);
-                        rt.has_frame[i] = true;
-                    }
+    // 映している席と、今のシーンで必要な席の映像をデコードする
+    let needed = crate::scenes::seats_needed(scenes.sw.program);
+    for i in 0..4 {
+        if i != cur.index() && !needed[i] {
+            continue;
+        }
+        // 配信ディレイ＋この席の同期補正だけ前の映像を出す
+        let back = std::time::Duration::from_secs_f64(
+            (rt.delay_secs + rt.sync_offset_ms[i] as f64 / 1000.0).max(0.0),
+        );
+        let target = std::time::Instant::now()
+            .checked_sub(back)
+            .unwrap_or_else(std::time::Instant::now);
+        let Some(f) = rt.streams[i].as_ref().and_then(|s| s.frame_at(target)) else {
+            continue;
+        };
+        if f.seq == rt.last_seq[i] {
+            continue;
+        }
+        rt.last_seq[i] = f.seq;
+        match decode_rgba(&f.data) {
+            Ok((w, h, px)) if w == FACE_W && h == FACE_H => {
+                if let Some(mut img) = images.get_mut(&rt.images[i]) {
+                    img.data = Some(px);
+                    rt.has_frame[i] = true;
                 }
-                Ok((w, h, _)) => warn!("顔カメラ{}の大きさが違います: {w}x{h}", cur.label()),
-                Err(e) => warn!("顔カメラ{}の映像を読めません: {e}", cur.label()),
             }
+            Ok((w, h, _)) => warn!(
+                "顔カメラ{}の大きさが違います: {w}x{h}",
+                SeatId(i as u8).label()
+            ),
+            Err(e) => warn!("顔カメラ{}の映像を読めません: {e}", SeatId(i as u8).label()),
         }
     }
     if let Some(o) = &rt.obs {

@@ -17,6 +17,7 @@ mod operator;
 mod output;
 mod player_screen;
 mod program;
+mod scenes;
 mod theme;
 mod ui_kit;
 
@@ -147,6 +148,8 @@ fn main() {
     .init_resource::<net::Table>()
     .init_resource::<program::Program>()
     .init_resource::<program::Delayed>()
+    .init_resource::<scenes::Scenes>()
+    .init_resource::<output::ScoreAnim>()
     .insert_resource(config::ClientConfig::load())
     .init_resource::<output::WinShow>()
     .init_resource::<output::OutputDirty>()
@@ -180,6 +183,7 @@ fn main() {
                 Update,
                 (
                     program::release,
+                    scenes::update_scenes,
                     output::handle_overlays,
                     face::face_update,
                     output::rebuild_output,

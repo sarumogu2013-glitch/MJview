@@ -8,6 +8,7 @@ pub mod face;
 pub mod log;
 pub mod protocol;
 pub mod rules;
+pub mod scene;
 pub mod scoring;
 pub mod state;
 pub mod tile;

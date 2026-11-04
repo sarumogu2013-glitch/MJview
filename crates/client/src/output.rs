@@ -103,12 +103,29 @@ pub fn rebuild_output(
     tiles: Option<Res<TileImages>>,
     theme: Res<Theme>,
     time: Res<Time>,
+    scenes: Res<crate::scenes::Scenes>,
+    mut anim: ResMut<ScoreAnim>,
 ) {
     let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else {
         return;
     };
     let now = time.elapsed_secs_f64();
     let st = table.full.as_ref().map(|f| &f.state);
+    // 点数移動のアニメーション（前の表示から新しい点数へ数える）
+    if let Some(s) = st {
+        let to = s.scores();
+        if to != anim.to {
+            anim.from = anim.shown(now);
+            anim.to = to;
+            anim.start = now;
+            if !anim.initialized {
+                anim.from = to;
+                anim.initialized = true;
+            }
+        }
+    }
+    let shown = anim.shown(now);
+    let step = anim.step(now);
     let face_seat = st.map(|_| face.current);
     let live = face_seat.is_some_and(|f| face.live(f));
     let showing = win.current(now).map(|r| r.input.winner);
@@ -118,7 +135,13 @@ pub fn rebuild_output(
         face_seat,
         (live, face.output),
         showing,
-        table.full.is_some()
+        (
+            table.full.is_some(),
+            scenes.sw.program,
+            &scenes.telop,
+            &scenes.waiting_text,
+            step
+        )
     );
     if key == dirty.last_key {
         return;
@@ -156,11 +179,28 @@ pub fn rebuild_output(
                         );
                     });
             }
+            Some(s) if scenes.sw.program != janscope_core::scene::SceneKind::Game => {
+                use janscope_core::scene::SceneKind;
+                match scenes.sw.program {
+                    SceneKind::Fullscreen(seat) => {
+                        crate::scenes::draw_fullscreen(p, &kit, s, &face, seat)
+                    }
+                    SceneKind::PlayerIntro => crate::scenes::draw_intro(p, &kit, s, &face),
+                    SceneKind::Waiting => {
+                        crate::scenes::draw_waiting(p, &kit, &scenes.waiting_text)
+                    }
+                    SceneKind::FinalResult => crate::scenes::draw_final(p, &kit, s, &face),
+                    SceneKind::Game => {}
+                }
+                if let Some(t) = &scenes.telop {
+                    crate::scenes::draw_telop(p, &kit, t, false);
+                }
+            }
             Some(s) => {
                 let face_seat = face_seat.unwrap();
                 draw_face(p, &kit, s, face_seat, &face);
                 draw_round(p, &kit, s);
-                draw_scores(p, &kit, s, face_seat);
+                draw_scores(p, &kit, s, face_seat, shown);
                 draw_dice(p, &kit, s);
                 draw_dora(p, &kit, s);
                 draw_wall(p, &kit, s);
@@ -170,6 +210,8 @@ pub fn rebuild_output(
                 }
                 if let Some(r) = win.current(now) {
                     draw_win(p, &kit, s, r);
+                } else if let Some(t) = &scenes.telop {
+                    crate::scenes::draw_telop(p, &kit, t, true);
                 }
             }
         });
@@ -334,7 +376,7 @@ fn draw_round(p: &mut Kids, k: &Kit, s: &TableState) {
     });
 }
 
-fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId) {
+fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId, shown: [i32; 4]) {
     let th = k.theme;
     let ranks = s.ranks();
     let top = s.rank_order()[0];
@@ -405,7 +447,7 @@ fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId) {
                     .with_children(|c| {
                         k.text(
                             c,
-                            janscope_core::scoring::fmt_pts(st.score),
+                            janscope_core::scoring::fmt_pts(shown[seat.index()]),
                             40.0,
                             th.text,
                             true,
@@ -811,4 +853,49 @@ fn draw_win(p: &mut Kids, k: &Kit, s: &TableState, r: &WinRecord) {
             }
         });
     });
+}
+
+/// 点数移動のアニメーション（設計書 4.6 演出: 点数移動アニメの有無・速度。設定UIは段階B8）。
+#[derive(Resource)]
+pub struct ScoreAnim {
+    pub from: [i32; 4],
+    pub to: [i32; 4],
+    pub start: f64,
+    /// 秒（0 でアニメーションなし）
+    pub duration: f64,
+    initialized: bool,
+}
+
+impl Default for ScoreAnim {
+    fn default() -> Self {
+        ScoreAnim {
+            from: [0; 4],
+            to: [0; 4],
+            start: 0.0,
+            duration: 1.2,
+            initialized: false,
+        }
+    }
+}
+
+const ANIM_STEPS: f64 = 24.0;
+
+impl ScoreAnim {
+    fn progress(&self, now: f64) -> f64 {
+        if self.duration <= 0.0 {
+            return 1.0;
+        }
+        ((now - self.start) / self.duration).clamp(0.0, 1.0)
+    }
+    /// 表示する点数（100点単位で丸める）。
+    pub fn shown(&self, now: f64) -> [i32; 4] {
+        let p = (self.progress(now) * ANIM_STEPS).floor() / ANIM_STEPS;
+        std::array::from_fn(|i| {
+            let v = self.from[i] as f64 + (self.to[i] - self.from[i]) as f64 * p;
+            ((v / 100.0).round() * 100.0) as i32
+        })
+    }
+    fn step(&self, now: f64) -> u32 {
+        (self.progress(now) * ANIM_STEPS) as u32
+    }
 }
