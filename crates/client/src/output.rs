@@ -46,7 +46,6 @@ impl FaceSelect {
 #[derive(Resource, Default)]
 pub struct WinShow {
     pub records: Vec<WinRecord>,
-    pub ura: bool,
     pub started: f64,
     /// 1件あたりの表示秒数
     pub per: f64,
@@ -63,9 +62,6 @@ impl WinShow {
         }
         self.records.get(i as usize)
     }
-    pub fn active(&self, now: f64) -> bool {
-        self.current(now).is_some()
-    }
 }
 
 /// 組み直しが必要か（前回の表示内容のかぎ）。
@@ -75,7 +71,12 @@ pub struct OutputDirty {
 }
 
 /// 演出の出来事を受けて、選手画面・アガリ演出を切り替える。
-pub fn handle_overlays(mut table: ResMut<Table>, mut face: ResMut<FaceSelect>, mut win: ResMut<WinShow>, time: Res<Time>) {
+pub fn handle_overlays(
+    mut table: ResMut<Table>,
+    mut face: ResMut<FaceSelect>,
+    mut win: ResMut<WinShow>,
+    time: Res<Time>,
+) {
     let now = time.elapsed_secs_f64();
     let overlays: Vec<_> = table.overlays.drain(..).collect();
     for (_, o) in overlays {
@@ -118,12 +119,20 @@ pub fn rebuild_output(
     theme: Res<Theme>,
     time: Res<Time>,
 ) {
-    let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else { return };
+    let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else {
+        return;
+    };
     let now = time.elapsed_secs_f64();
     let st = table.full.as_ref().map(|f| &f.state);
     let face_seat = st.map(|s| face.current(s, now));
     let showing = win.current(now).map(|r| r.input.winner);
-    let key = format!("{}|{:?}|{:?}|{:?}", table.seq, face_seat, showing, table.full.is_some());
+    let key = format!(
+        "{}|{:?}|{:?}|{:?}",
+        table.seq,
+        face_seat,
+        showing,
+        table.full.is_some()
+    );
     if key == dirty.last_key {
         return;
     }
@@ -131,19 +140,34 @@ pub fn rebuild_output(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let kit = Kit { fonts: &fonts, tiles: &tiles, theme: &theme };
+    let kit = Kit {
+        fonts: &fonts,
+        tiles: &tiles,
+        theme: &theme,
+    };
     commands
         .spawn((
-            Node { width: Val::Px(1920.0), height: Val::Px(1080.0), ..default() },
+            Node {
+                width: Val::Px(1920.0),
+                height: Val::Px(1080.0),
+                ..default()
+            },
             BackgroundColor(theme.bg),
             UiTargetCamera(cam),
             OutputRoot,
         ))
         .with_children(|p| match st {
             None => {
-                p.spawn(center(abs(0.0, 0.0, 1920.0, 1080.0))).with_children(|q| {
-                    kit.text(q, "サーバーからの状態を待っています", 48.0, theme.text_dim, false);
-                });
+                p.spawn(center(abs(0.0, 0.0, 1920.0, 1080.0)))
+                    .with_children(|q| {
+                        kit.text(
+                            q,
+                            "サーバーからの状態を待っています",
+                            48.0,
+                            theme.text_dim,
+                            false,
+                        );
+                    });
             }
             Some(s) => {
                 let face_seat = face_seat.unwrap();
@@ -170,30 +194,55 @@ fn wind_dealer(s: &TableState, seat: SeatId) -> (String, bool) {
 
 fn draw_face(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId) {
     let th = k.theme;
-    p.spawn((abs(0.0, 0.0, 1066.0, 600.0), BackgroundColor(th.face_bg))).with_children(|q| {
-        q.spawn(center(abs(0.0, 0.0, 1066.0, 510.0))).with_children(|c| {
-            k.text(c, "顔カメラ", 36.0, Color::srgb(0.25, 0.27, 0.30), false);
+    p.spawn((abs(0.0, 0.0, 1066.0, 600.0), BackgroundColor(th.face_bg)))
+        .with_children(|q| {
+            q.spawn(center(abs(0.0, 0.0, 1066.0, 510.0)))
+                .with_children(|c| {
+                    k.text(c, "顔カメラ", 36.0, Color::srgb(0.25, 0.27, 0.30), false);
+                });
+            q.spawn((
+                row(abs(0.0, 510.0, 1066.0, 90.0), 24.0),
+                BackgroundColor(th.band),
+            ))
+            .with_children(|b| {
+                let (w, dealer) = wind_dealer(s, seat);
+                b.spawn(Node {
+                    width: Val::Px(12.0),
+                    ..default()
+                });
+                k.text(b, w, 44.0, th.text, true);
+                if dealer {
+                    dealer_badge(b, k, 30.0);
+                }
+                k.text(
+                    b,
+                    s.seats[seat.index()].player.name.clone(),
+                    48.0,
+                    th.text,
+                    true,
+                );
+                b.spawn(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
+                if s.seats[seat.index()].riichi {
+                    riichi_badge(b, k, 34.0);
+                }
+                b.spawn(Node {
+                    width: Val::Px(12.0),
+                    ..default()
+                });
+            });
         });
-        q.spawn((row(abs(0.0, 510.0, 1066.0, 90.0), 24.0), BackgroundColor(th.band))).with_children(|b| {
-            let (w, dealer) = wind_dealer(s, seat);
-            b.spawn(Node { width: Val::Px(12.0), ..default() });
-            k.text(b, w, 44.0, th.text, true);
-            if dealer {
-                dealer_badge(b, k, 30.0);
-            }
-            k.text(b, s.seats[seat.index()].player.name.clone(), 48.0, th.text, true);
-            b.spawn(Node { flex_grow: 1.0, ..default() });
-            if s.seats[seat.index()].riichi {
-                riichi_badge(b, k, 34.0);
-            }
-            b.spawn(Node { width: Val::Px(12.0), ..default() });
-        });
-    });
 }
 
 fn dealer_badge(p: &mut Kids, k: &Kit, size: f32) {
     p.spawn((
-        center(Node { padding: UiRect::axes(Val::Px(8.0), Val::Px(0.0)), border_radius: BorderRadius::all(Val::Px(6.0)), ..default() }),
+        center(Node {
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(0.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        }),
         BackgroundColor(k.theme.dealer),
     ))
     .with_children(|q| k.text(q, "親", size, Color::WHITE, true));
@@ -201,7 +250,11 @@ fn dealer_badge(p: &mut Kids, k: &Kit, size: f32) {
 
 fn riichi_badge(p: &mut Kids, k: &Kit, size: f32) {
     p.spawn((
-        center(Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(0.0)), border_radius: BorderRadius::all(Val::Px(6.0)), ..default() }),
+        center(Node {
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(0.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        }),
         BackgroundColor(k.theme.riichi),
     ))
     .with_children(|q| k.text(q, "リーチ", size, Color::BLACK, true));
@@ -209,8 +262,15 @@ fn riichi_badge(p: &mut Kids, k: &Kit, size: f32) {
 
 fn draw_round(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
-    p.spawn((row(abs(1066.0, 0.0, 854.0, 100.0), 36.0), BackgroundColor(th.panel_alt))).with_children(|q| {
-        q.spawn(Node { width: Val::Px(8.0), ..default() });
+    p.spawn((
+        row(abs(1066.0, 0.0, 854.0, 100.0), 36.0),
+        BackgroundColor(th.panel_alt),
+    ))
+    .with_children(|q| {
+        q.spawn(Node {
+            width: Val::Px(8.0),
+            ..default()
+        });
         let label = match s.phase {
             Phase::Setup => "対局前".to_string(),
             Phase::GameOver => "終局".to_string(),
@@ -218,10 +278,26 @@ fn draw_round(p: &mut Kids, k: &Kit, s: &TableState) {
         };
         k.text(q, label, 52.0, th.text, true);
         k.text(q, format!("{}本場", s.honba), 40.0, th.text, false);
-        k.text(q, format!("供託 {}", janscope_core::scoring::fmt_pts(s.kyotaku as i32 * 1000)), 36.0, th.text_dim, false);
+        k.text(
+            q,
+            format!(
+                "供託 {}",
+                janscope_core::scoring::fmt_pts(s.kyotaku as i32 * 1000)
+            ),
+            36.0,
+            th.text_dim,
+            false,
+        );
         if s.is_all_last() && s.phase != Phase::GameOver {
-            q.spawn((center(Node { padding: UiRect::axes(Val::Px(12.0), Val::Px(2.0)), border_radius: BorderRadius::all(Val::Px(6.0)), ..default() }), BackgroundColor(th.warn)))
-                .with_children(|b| k.text(b, "オーラス", 32.0, Color::WHITE, true));
+            q.spawn((
+                center(Node {
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    ..default()
+                }),
+                BackgroundColor(th.warn),
+            ))
+            .with_children(|b| k.text(b, "オーラス", 32.0, Color::WHITE, true));
         }
     });
 }
@@ -231,53 +307,137 @@ fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId) {
     let ranks = s.ranks();
     let top = s.rank_order()[0];
     let top_score = s.seats[top.index()].score;
-    p.spawn((abs(1066.0, 100.0, 854.0, 300.0), BackgroundColor(th.panel))).with_children(|q| {
-        for (i, seat) in SeatId::ALL.iter().enumerate() {
-            let st = &s.seats[seat.index()];
-            let bg = if *seat == face_seat { th.panel_alt } else { th.panel };
-            q.spawn((row(abs(0.0, i as f32 * 75.0, 854.0, 75.0), 16.0), BackgroundColor(bg))).with_children(|r| {
-                // 選手画面に映っている選手の行は左端に色帯
-                r.spawn((Node { width: Val::Px(8.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(if *seat == face_seat { th.highlight } else { bg })));
-                let (w, dealer) = wind_dealer(s, *seat);
-                r.spawn(Node { width: Val::Px(44.0), ..default() }).with_children(|c| k.text(c, w, 36.0, th.text, true));
-                r.spawn(Node { width: Val::Px(52.0), ..default() }).with_children(|c| {
-                    if dealer {
-                        dealer_badge(c, k, 26.0);
-                    }
-                });
-                r.spawn(Node { width: Val::Px(270.0), flex_direction: FlexDirection::Column, ..default() }).with_children(|c| {
-                    k.text(c, st.player.name.clone(), 34.0, th.text, true);
-                    if let Some(a) = &st.player.affiliation {
-                        k.text(c, a.clone(), 18.0, th.text_dim, false);
-                    }
-                });
-                r.spawn(Node { width: Val::Px(70.0), ..default() }).with_children(|c| {
-                    if st.riichi {
-                        riichi_badge(c, k, 20.0);
-                    }
-                });
-                r.spawn(Node { width: Val::Px(170.0), justify_content: JustifyContent::FlexEnd, ..default() })
-                    .with_children(|c| k.text(c, janscope_core::scoring::fmt_pts(st.score), 40.0, th.text, true));
-                r.spawn(Node { width: Val::Px(140.0), flex_direction: FlexDirection::Column, align_items: AlignItems::FlexEnd, ..default() })
+    p.spawn((abs(1066.0, 100.0, 854.0, 300.0), BackgroundColor(th.panel)))
+        .with_children(|q| {
+            for (i, seat) in SeatId::ALL.iter().enumerate() {
+                let st = &s.seats[seat.index()];
+                let bg = if *seat == face_seat {
+                    th.panel_alt
+                } else {
+                    th.panel
+                };
+                q.spawn((
+                    row(abs(0.0, i as f32 * 75.0, 854.0, 75.0), 16.0),
+                    BackgroundColor(bg),
+                ))
+                .with_children(|r| {
+                    // 選手画面に映っている選手の行は左端に色帯
+                    r.spawn((
+                        Node {
+                            width: Val::Px(8.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        BackgroundColor(if *seat == face_seat { th.highlight } else { bg }),
+                    ));
+                    let (w, dealer) = wind_dealer(s, *seat);
+                    r.spawn(Node {
+                        width: Val::Px(44.0),
+                        ..default()
+                    })
+                    .with_children(|c| k.text(c, w, 36.0, th.text, true));
+                    r.spawn(Node {
+                        width: Val::Px(52.0),
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        if dealer {
+                            dealer_badge(c, k, 26.0);
+                        }
+                    });
+                    r.spawn(Node {
+                        width: Val::Px(250.0),
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        k.text(c, st.player.name.clone(), 34.0, th.text, true);
+                        if let Some(a) = &st.player.affiliation {
+                            k.text(c, a.clone(), 18.0, th.text_dim, false);
+                        }
+                    });
+                    r.spawn(Node {
+                        width: Val::Px(90.0),
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        if st.riichi {
+                            riichi_badge(c, k, 20.0);
+                        }
+                    });
+                    r.spawn(Node {
+                        width: Val::Px(160.0),
+                        justify_content: JustifyContent::FlexEnd,
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        k.text(
+                            c,
+                            janscope_core::scoring::fmt_pts(st.score),
+                            40.0,
+                            th.text,
+                            true,
+                        )
+                    });
+                    r.spawn(Node {
+                        width: Val::Px(130.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::FlexEnd,
+                        ..default()
+                    })
                     .with_children(|c| {
                         let d = s.last_deltas[seat.index()];
                         if d != 0 {
-                            k.text(c, delta_text(d), 26.0, if d > 0 { th.plus } else { th.minus }, true);
+                            k.text(
+                                c,
+                                delta_text(d),
+                                26.0,
+                                if d > 0 { th.plus } else { th.minus },
+                                true,
+                            );
                         } else if *seat != top {
-                            k.text(c, delta_text(st.score - top_score), 22.0, th.text_dim, false);
+                            k.text(
+                                c,
+                                delta_text(st.score - top_score),
+                                22.0,
+                                th.text_dim,
+                                false,
+                            );
                         }
                     });
-                r.spawn(Node { width: Val::Px(60.0), justify_content: JustifyContent::Center, ..default() })
-                    .with_children(|c| k.text(c, format!("{}位", ranks[seat.index()]), 28.0, th.text_dim, false));
-            });
-        }
-    });
+                    r.spawn(Node {
+                        width: Val::Px(60.0),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_children(|c| {
+                        k.text(
+                            c,
+                            format!("{}位", ranks[seat.index()]),
+                            28.0,
+                            th.text_dim,
+                            false,
+                        )
+                    });
+                });
+            }
+        });
 }
 
 fn draw_dice(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
-    p.spawn((center(abs(1066.0, 400.0, 260.0, 200.0)), BackgroundColor(th.panel_alt))).with_children(|q| {
-        q.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: Val::Px(8.0), ..default() }).with_children(|c| {
+    p.spawn((
+        center(abs(1066.0, 400.0, 260.0, 200.0)),
+        BackgroundColor(th.panel_alt),
+    ))
+    .with_children(|q| {
+        q.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|c| {
             k.text(c, "サイコロ", 22.0, th.text_dim, false);
             if s.dice.is_empty() {
                 k.text(c, "—", 48.0, th.text_dim, false);
@@ -296,8 +456,18 @@ fn draw_dice(p: &mut Kids, k: &Kit, s: &TableState) {
 
 fn draw_dora(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
-    p.spawn((center(abs(1326.0, 400.0, 334.0, 200.0)), BackgroundColor(th.panel))).with_children(|q| {
-        q.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: Val::Px(8.0), ..default() }).with_children(|c| {
+    p.spawn((
+        center(abs(1326.0, 400.0, 334.0, 200.0)),
+        BackgroundColor(th.panel),
+    ))
+    .with_children(|q| {
+        q.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|c| {
             k.text(c, "ドラ表示牌", 22.0, th.text_dim, false);
             let n = s.dora_indicators.len().max(1) as f32;
             // 槓ドラで増えたら縮小して並べる（最大5枚）
@@ -317,16 +487,43 @@ fn draw_dora(p: &mut Kids, k: &Kit, s: &TableState) {
 fn draw_wall(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
     let low = s.phase == Phase::InHand && s.wall_remaining <= 4;
-    p.spawn((center(abs(1660.0, 400.0, 260.0, 200.0)), BackgroundColor(if low { th.warn } else { th.panel_alt }))).with_children(|q| {
-        q.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }).with_children(|c| {
-            k.text(c, "残り", 22.0, if low { Color::WHITE } else { th.text_dim }, false);
-            let txt = if s.phase == Phase::InHand { s.wall_remaining.to_string() } else { "—".into() };
+    p.spawn((
+        center(abs(1660.0, 400.0, 260.0, 200.0)),
+        BackgroundColor(if low { th.warn } else { th.panel_alt }),
+    ))
+    .with_children(|q| {
+        q.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|c| {
+            k.text(
+                c,
+                "残り",
+                22.0,
+                if low { Color::WHITE } else { th.text_dim },
+                false,
+            );
+            let txt = if s.phase == Phase::InHand {
+                s.wall_remaining.to_string()
+            } else {
+                "—".into()
+            };
             k.text(c, txt, 96.0, th.text, true);
         });
     });
 }
 
-fn draw_hand_frame(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId, x: f32, on_face: bool, win: Option<&WinRecord>) {
+fn draw_hand_frame(
+    p: &mut Kids,
+    k: &Kit,
+    s: &TableState,
+    seat: SeatId,
+    x: f32,
+    on_face: bool,
+    win: Option<&WinRecord>,
+) {
     let th = k.theme;
     let st = &s.seats[seat.index()];
     let border = if win.is_some() {
@@ -339,27 +536,43 @@ fn draw_hand_frame(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId, x: f32, 
         th.panel_alt
     };
     p.spawn((
-        Node { border: UiRect::all(Val::Px(4.0)), ..abs(x, 600.0, 480.0, 480.0) },
+        Node {
+            border: UiRect::all(Val::Px(4.0)),
+            ..abs(x, 600.0, 480.0, 480.0)
+        },
         BackgroundColor(th.panel),
         BorderColor::all(border),
     ))
     .with_children(|q| {
-        q.spawn((row(abs(0.0, 0.0, 472.0, 44.0), 12.0), BackgroundColor(th.band))).with_children(|b| {
-            b.spawn(Node { width: Val::Px(6.0), ..default() });
+        q.spawn((
+            row(abs(0.0, 0.0, 472.0, 44.0), 12.0),
+            BackgroundColor(th.band),
+        ))
+        .with_children(|b| {
+            b.spawn(Node {
+                width: Val::Px(6.0),
+                ..default()
+            });
             let (w, dealer) = wind_dealer(s, seat);
             k.text(b, w, 26.0, th.text, true);
             if dealer {
                 dealer_badge(b, k, 20.0);
             }
             k.text(b, st.player.name.clone(), 26.0, th.text, true);
-            b.spawn(Node { flex_grow: 1.0, ..default() });
+            b.spawn(Node {
+                flex_grow: 1.0,
+                ..default()
+            });
             if st.riichi {
                 riichi_badge(b, k, 18.0);
             }
             if win.is_none() {
                 k.text(b, "手動", 16.0, th.text_dim, false);
             }
-            b.spawn(Node { width: Val::Px(6.0), ..default() });
+            b.spawn(Node {
+                width: Val::Px(6.0),
+                ..default()
+            });
         });
         // 手牌（アガリ時は倒した手）・副露
         q.spawn(Node {
@@ -390,16 +603,25 @@ fn draw_hand_frame(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId, x: f32, 
             let last = closed.len().saturating_sub(1);
             for (i, t) in closed.iter().enumerate() {
                 if win.is_some() && i == last {
-                    r.spawn(Node { width: Val::Px(w * 0.4), ..default() });
+                    r.spawn(Node {
+                        width: Val::Px(w * 0.4),
+                        ..default()
+                    });
                 }
                 k.tile(r, Some(*t), w, false, false);
             }
             if !melds.is_empty() {
-                r.spawn(Node { flex_grow: 1.0, ..default() });
+                r.spawn(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
             }
             for m in melds {
                 draw_meld(r, k, m, w);
-                r.spawn(Node { width: Val::Px(w * 0.2), ..default() });
+                r.spawn(Node {
+                    width: Val::Px(w * 0.2),
+                    ..default()
+                });
             }
         });
     });
@@ -407,11 +629,22 @@ fn draw_hand_frame(p: &mut Kids, k: &Kit, s: &TableState, seat: SeatId, x: f32, 
 
 /// 副露（鳴いた牌を横向きに）。
 pub fn draw_meld(p: &mut Kids, k: &Kit, m: &Meld, w: f32) {
-    p.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::FlexEnd, ..default() }).with_children(|r| {
+    p.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::FlexEnd,
+        ..default()
+    })
+    .with_children(|r| {
         for (i, t) in m.tiles.iter().enumerate() {
             let face_down = m.kind == MeldKind::Ankan && (i == 0 || i == 3);
             let sideways = m.kind != MeldKind::Ankan && i == 0;
-            k.tile(r, if face_down { None } else { Some(*t) }, w, sideways, false);
+            k.tile(
+                r,
+                if face_down { None } else { Some(*t) },
+                w,
+                sideways,
+                false,
+            );
         }
     });
 }
@@ -420,33 +653,48 @@ fn draw_win(p: &mut Kids, k: &Kit, s: &TableState, r: &WinRecord) {
     let th = k.theme;
     let sc = &r.score;
     let who = &s.seats[r.input.winner.index()].player.name;
-    p.spawn((abs(0.0, 0.0, 1920.0, 600.0), BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.93)))).with_children(|q| {
-        q.spawn(row(abs(60.0, 30.0, 1800.0, 80.0), 28.0)).with_children(|t| {
-            k.text(t, who.clone(), 60.0, th.text, true);
-            let how = match r.input.loser {
-                None => "ツモ".to_string(),
-                Some(l) => format!("ロン（{}）", s.seats[l.index()].player.name),
-            };
-            k.text(t, how, 40.0, th.riichi, true);
-        });
+    p.spawn((
+        abs(0.0, 0.0, 1920.0, 600.0),
+        BackgroundColor(Color::srgb(0.02, 0.03, 0.05)),
+    ))
+    .with_children(|q| {
+        q.spawn(row(abs(60.0, 30.0, 1800.0, 80.0), 28.0))
+            .with_children(|t| {
+                k.text(t, who.clone(), 60.0, th.text, true);
+                let how = match r.input.loser {
+                    None => "ツモ".to_string(),
+                    Some(l) => format!("ロン（{}）", s.seats[l.index()].player.name),
+                };
+                k.text(t, how, 40.0, th.riichi, true);
+            });
         // 手牌
-        q.spawn(row(abs(60.0, 130.0, 1800.0, 110.0), 0.0)).with_children(|t| {
-            let mut c = r.input.closed.clone();
-            if let Some(pos) = c.iter().position(|x| *x == r.input.win_tile) {
-                c.remove(pos);
-            }
-            c.sort_by_key(|x| x.sort_key());
-            for x in &c {
-                k.tile(t, Some(*x), 66.0, false, false);
-            }
-            t.spawn(Node { width: Val::Px(20.0), ..default() });
-            k.tile(t, Some(r.input.win_tile), 66.0, false, false);
-            t.spawn(Node { width: Val::Px(40.0), ..default() });
-            for m in &r.input.melds {
-                draw_meld(t, k, m, 60.0);
-                t.spawn(Node { width: Val::Px(12.0), ..default() });
-            }
-        });
+        q.spawn(row(abs(60.0, 130.0, 1800.0, 110.0), 0.0))
+            .with_children(|t| {
+                let mut c = r.input.closed.clone();
+                if let Some(pos) = c.iter().position(|x| *x == r.input.win_tile) {
+                    c.remove(pos);
+                }
+                c.sort_by_key(|x| x.sort_key());
+                for x in &c {
+                    k.tile(t, Some(*x), 66.0, false, false);
+                }
+                t.spawn(Node {
+                    width: Val::Px(20.0),
+                    ..default()
+                });
+                k.tile(t, Some(r.input.win_tile), 66.0, false, false);
+                t.spawn(Node {
+                    width: Val::Px(40.0),
+                    ..default()
+                });
+                for m in &r.input.melds {
+                    draw_meld(t, k, m, 60.0);
+                    t.spawn(Node {
+                        width: Val::Px(12.0),
+                        ..default()
+                    });
+                }
+            });
         // 役一覧
         q.spawn(Node {
             position_type: PositionType::Absolute,
@@ -463,19 +711,45 @@ fn draw_win(p: &mut Kids, k: &Kit, s: &TableState, r: &WinRecord) {
         .with_children(|c| {
             for y in &sc.yaku {
                 let v = if y.yakuman > 0 {
-                    if y.yakuman > 1 { format!("{}倍役満", y.yakuman) } else { "役満".into() }
+                    if y.yakuman > 1 {
+                        format!("{}倍役満", y.yakuman)
+                    } else {
+                        "役満".into()
+                    }
                 } else {
                     format!("{}翻", y.han)
                 };
-                c.spawn(row(Node { width: Val::Px(500.0), ..default() }, 20.0)).with_children(|l| {
-                    l.spawn(Node { width: Val::Px(340.0), ..default() }).with_children(|n| k.text(n, y.name.clone(), 38.0, th.text, false));
+                c.spawn(row(
+                    Node {
+                        width: Val::Px(500.0),
+                        ..default()
+                    },
+                    20.0,
+                ))
+                .with_children(|l| {
+                    l.spawn(Node {
+                        width: Val::Px(340.0),
+                        ..default()
+                    })
+                    .with_children(|n| k.text(n, y.name.clone(), 38.0, th.text, false));
                     k.text(l, v, 38.0, th.text, true);
                 });
             }
             for (name, n) in [("ドラ", sc.dora), ("赤ドラ", sc.aka), ("裏ドラ", sc.ura)] {
                 if n > 0 {
-                    c.spawn(row(Node { width: Val::Px(500.0), ..default() }, 20.0)).with_children(|l| {
-                        l.spawn(Node { width: Val::Px(340.0), ..default() }).with_children(|t| k.text(t, name, 38.0, th.text, false));
+                    c.spawn(row(
+                        Node {
+                            width: Val::Px(500.0),
+                            ..default()
+                        },
+                        20.0,
+                    ))
+                    .with_children(|l| {
+                        l.spawn(Node {
+                            width: Val::Px(340.0),
+                            ..default()
+                        })
+                        .with_children(|t| k.text(t, name, 38.0, th.text, false));
                         k.text(l, format!("{n}翻"), 38.0, th.text, true);
                     });
                 }

@@ -19,7 +19,9 @@ mod ui_kit;
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy::window::{MonitorSelection, PresentMode, WindowMode, WindowPosition, WindowRef, WindowResolution};
+use bevy::window::{
+    MonitorSelection, PresentMode, WindowMode, WindowPosition, WindowRef, WindowResolution,
+};
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
 use janscope_core::protocol::{ClientRole, DEFAULT_PORT};
 
@@ -101,7 +103,11 @@ fn main() {
     let player = role == ClientRole::PlayerScreen;
     let primary = if player {
         let mode = if args.fullscreen {
-            WindowMode::BorderlessFullscreen(args.monitor.map(MonitorSelection::Index).unwrap_or(MonitorSelection::Current))
+            WindowMode::BorderlessFullscreen(
+                args.monitor
+                    .map(MonitorSelection::Index)
+                    .unwrap_or(MonitorSelection::Current),
+            )
         } else {
             WindowMode::Windowed
         };
@@ -123,8 +129,14 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
-            .set(WindowPlugin { primary_window: Some(primary), ..default() })
-            .set(AssetPlugin { file_path: assets::assets_dir().to_string_lossy().into_owned(), ..default() }),
+            .set(WindowPlugin {
+                primary_window: Some(primary),
+                ..default()
+            })
+            .set(AssetPlugin {
+                file_path: assets::assets_dir().to_string_lossy().into_owned(),
+                ..default()
+            }),
     )
     .insert_resource(ClearColor(Color::BLACK))
     .insert_resource(Role(role))
@@ -138,6 +150,8 @@ fn main() {
     .add_systems(Startup, load_assets);
 
     if args.demo {
+        // 見本の状態を表示する。操作ウィンドウも描けるよう、つながらない宛先の接続を置いておく（状態は取り込まない）
+        app.insert_resource(net::Net::connect("127.0.0.1:9", "", role));
         app.add_systems(Startup, demo::install);
     } else {
         app.insert_resource(net::Net::connect(&args.server, &args.code, role));
@@ -145,24 +159,39 @@ fn main() {
     }
 
     if player {
-        app.add_systems(Startup, setup_player_window).add_systems(Update, player_screen::rebuild_player_screen);
+        app.add_systems(Startup, setup_player_window)
+            .add_systems(Update, player_screen::rebuild_player_screen);
     } else {
         app.add_plugins(EguiPlugin::default())
             .init_resource::<operator::OperatorUi>()
-            .add_systems(Startup, move |c: Commands, s: ResMut<EguiGlobalSettings>| setup_operator_windows(c, s, role, args.output_decorations))
-            .add_systems(Update, (output::handle_overlays, output::rebuild_output).chain());
-        if !args.demo {
-            app.add_systems(EguiPrimaryContextPass, operator::operator_ui);
-        }
+            .add_systems(
+                Startup,
+                move |c: Commands, s: ResMut<EguiGlobalSettings>| {
+                    setup_operator_windows(c, s, role, args.output_decorations)
+                },
+            )
+            .add_systems(
+                Update,
+                (output::handle_overlays, output::rebuild_output).chain(),
+            );
+        app.add_systems(EguiPrimaryContextPass, operator::operator_ui);
     }
     if let Some(path) = args.screenshot.clone() {
-        app.insert_resource(demo::ScreenshotTask { path, frames: 0, done: false });
+        app.insert_resource(demo::ScreenshotTask {
+            path,
+            frames: 0,
+            done: false,
+        });
         app.add_systems(Update, demo::take_screenshot);
     }
     app.run();
 }
 
-fn load_assets(mut commands: Commands, server: Res<AssetServer>, mut images: ResMut<Assets<Image>>) {
+fn load_assets(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+) {
     match assets::load_tile_images(&mut images, assets::TileTheme::Regular) {
         Ok(t) => {
             commands.insert_resource(t);
@@ -176,7 +205,12 @@ fn setup_player_window(mut commands: Commands) {
     commands.spawn((Camera2d, player_screen::PlayerCamera));
 }
 
-fn setup_operator_windows(mut commands: Commands, mut egui: ResMut<EguiGlobalSettings>, role: ClientRole, decorations: bool) {
+fn setup_operator_windows(
+    mut commands: Commands,
+    mut egui: ResMut<EguiGlobalSettings>,
+    role: ClientRole,
+    decorations: bool,
+) {
     egui.auto_create_primary_context = false;
     commands.spawn((Camera2d, PrimaryEguiContext));
     if role == ClientRole::Broadcast {
@@ -191,6 +225,14 @@ fn setup_operator_windows(mut commands: Commands, mut egui: ResMut<EguiGlobalSet
                 ..default()
             })
             .id();
-        commands.spawn((Camera2d, Camera { order: 1, ..default() }, RenderTarget::Window(WindowRef::Entity(out)), output::OutputCamera));
+        commands.spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                ..default()
+            },
+            RenderTarget::Window(WindowRef::Entity(out)),
+            output::OutputCamera,
+        ));
     }
 }

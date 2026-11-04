@@ -17,30 +17,74 @@ use crate::output::OutputCamera;
 pub fn demo_state(kind: &str) -> (TableState, Vec<janscope_core::engine::Overlay>) {
     let mut s = TableState::default();
     let players = [
-        Player { name: "山田 太郎".into(), affiliation: Some("東京支部".into()) },
-        Player { name: "佐藤 花子".into(), affiliation: Some("大阪支部".into()) },
-        Player { name: "鈴木 一郎".into(), affiliation: None },
-        Player { name: "高橋 美咲".into(), affiliation: Some("名古屋支部".into()) },
+        Player {
+            name: "山田 太郎".into(),
+            affiliation: Some("東京支部".into()),
+        },
+        Player {
+            name: "佐藤 花子".into(),
+            affiliation: Some("大阪支部".into()),
+        },
+        Player {
+            name: "鈴木 一郎".into(),
+            affiliation: None,
+        },
+        Player {
+            name: "高橋 美咲".into(),
+            affiliation: Some("名古屋支部".into()),
+        },
     ];
     let mut ov = vec![];
     let mut act = |s: &mut TableState, a: Action| {
         ov = apply(s, &a).expect("demo");
     };
-    act(&mut s, Action::StartGame { config: GameConfig::preset_standard(), players, chiicha: SeatId(0) });
+    act(
+        &mut s,
+        Action::StartGame {
+            config: GameConfig::preset_standard(),
+            players,
+            chiicha: SeatId(0),
+        },
+    );
     act(&mut s, Action::StartHand { dice: vec![(3, 5)] });
-    act(&mut s, Action::Win { wins: vec![win(SeatId(2), Some(SeatId(0)), "234567m345p678s99p", "2m", vec![], false)] });
+    act(
+        &mut s,
+        Action::Win {
+            wins: vec![win(
+                SeatId(2),
+                Some(SeatId(0)),
+                "234567m345p678s99p",
+                "2m",
+                vec![],
+                false,
+            )],
+        },
+    );
     act(&mut s, Action::StartHand { dice: vec![(2, 6)] });
-    act(&mut s, Action::SetDora { tiles: parse_tiles("3p").unwrap() });
+    act(
+        &mut s,
+        Action::SetDora {
+            tiles: parse_tiles("3p").unwrap(),
+        },
+    );
     for _ in 0..28 {
         act(&mut s, Action::WallDecrement);
     }
     act(&mut s, Action::Riichi { seat: SeatId(3) });
     if kind == "hand" {
-        s.seats[1].melds = vec![Meld { kind: MeldKind::Pon, tiles: parse_tiles("777z").unwrap(), from: Some(SeatId(0)) }];
+        s.seats[1].melds = vec![Meld {
+            kind: MeldKind::Pon,
+            tiles: parse_tiles("777z").unwrap(),
+            from: Some(SeatId(0)),
+        }];
         return (s, ov);
     }
     let mut w = win(SeatId(3), None, "234m340p678s11p", "8s", vec![], true);
-    w.melds = vec![Meld { kind: MeldKind::Ankan, tiles: parse_tiles("5555z").unwrap(), from: None }];
+    w.melds = vec![Meld {
+        kind: MeldKind::Ankan,
+        tiles: parse_tiles("5555z").unwrap(),
+        from: None,
+    }];
     w.ura_indicators = parse_tiles("9p").unwrap();
     act(&mut s, Action::Win { wins: vec![w] });
     if kind == "result" {
@@ -49,7 +93,14 @@ pub fn demo_state(kind: &str) -> (TableState, Vec<janscope_core::engine::Overlay
     (s, ov)
 }
 
-fn win(winner: SeatId, loser: Option<SeatId>, closed: &str, wt: &str, melds: Vec<Meld>, riichi: bool) -> WinInput {
+fn win(
+    winner: SeatId,
+    loser: Option<SeatId>,
+    closed: &str,
+    wt: &str,
+    melds: Vec<Meld>,
+    riichi: bool,
+) -> WinInput {
     WinInput {
         winner,
         loser,
@@ -73,7 +124,11 @@ pub fn install(mut table: ResMut<Table>) {
     let (s, ov) = demo_state(&kind);
     table.link = Link::Connected;
     table.seq = 1;
-    table.full = Some(FullView { state: s, can_undo: true, can_redo: false });
+    table.full = Some(FullView {
+        state: s,
+        can_undo: true,
+        can_redo: false,
+    });
     table.overlays = ov.into_iter().map(|o| (0, o)).collect();
     table.changed = true;
 }
@@ -99,9 +154,17 @@ pub fn take_screenshot(
             bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Entity(e)) => Some(*e),
             _ => None,
         });
-        let win = target.or_else(|| primary.single().ok());
+        // JANSCOPE_SHOT=primary なら操作ウィンドウ（主ウィンドウ）を保存する
+        let want_primary = std::env::var("JANSCOPE_SHOT").is_ok_and(|v| v == "primary");
+        let win = if want_primary {
+            primary.single().ok()
+        } else {
+            target.or_else(|| primary.single().ok())
+        };
         if let Some(w) = win {
-            commands.spawn(Screenshot::window(w)).observe(save_to_disk(task.path.clone()));
+            commands
+                .spawn(Screenshot::window(w))
+                .observe(save_to_disk(task.path.clone()));
             task.done = true;
         }
     }

@@ -94,7 +94,14 @@ pub fn poll_net(net: Res<Net>, mut table: ResMut<Table>) {
             }
             NetEvent::Disconnected { reason } => table.link = Link::Disconnected(reason),
             NetEvent::Rejected { reason } => table.link = Link::Rejected(reason),
-            NetEvent::State { seq, at, view, overlays, by, .. } => {
+            NetEvent::State {
+                seq,
+                at,
+                view,
+                overlays,
+                by,
+                ..
+            } => {
                 table.seq = seq;
                 match *view {
                     TableStateView::Full(f) => table.full = Some(*f),

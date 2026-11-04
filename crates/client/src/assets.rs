@@ -32,6 +32,8 @@ pub const TILE_PX_H: u32 = 200;
 pub enum TileTheme {
     #[default]
     Regular,
+    /// 黒版（テーマ設定で切り替える。設定UIは段階B8）
+    #[allow(dead_code)]
     Black,
 }
 
@@ -75,14 +77,19 @@ pub struct Fonts {
 
 fn fluffy_name(t: Tile) -> String {
     if t.is_honor() {
-        return ["Ton", "Nan", "Shaa", "Pei", "Haku", "Hatsu", "Chun"][(t.number() - 1) as usize].into();
+        return ["Ton", "Nan", "Shaa", "Pei", "Haku", "Hatsu", "Chun"][(t.number() - 1) as usize]
+            .into();
     }
     let s = match t.suit() {
         Suit::Man => "Man",
         Suit::Pin => "Pin",
         _ => "Sou",
     };
-    if t.is_red() { format!("{s}5-Dora") } else { format!("{s}{}", t.number()) }
+    if t.is_red() {
+        format!("{s}5-Dora")
+    } else {
+        format!("{s}{}", t.number())
+    }
 }
 
 /// SVG を重ねてラスタライズする（RGBA、ストレートアルファ）。
@@ -91,9 +98,11 @@ pub fn rasterize(layers: &[&Path], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("pixmap")?;
     for p in layers {
         let data = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let tree = usvg::Tree::from_data(&data, &usvg::Options::default()).map_err(|e| format!("{}: {e}", p.display()))?;
+        let tree = usvg::Tree::from_data(&data, &usvg::Options::default())
+            .map_err(|e| format!("{}: {e}", p.display()))?;
         let size = tree.size();
-        let tf = tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height());
+        let tf =
+            tiny_skia::Transform::from_scale(w as f32 / size.width(), h as f32 / size.height());
         resvg::render(&tree, tf, &mut pixmap.as_mut());
     }
     let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -106,7 +115,11 @@ pub fn rasterize(layers: &[&Path], w: u32, h: u32) -> Result<Vec<u8>, String> {
 
 fn to_image(rgba: Vec<u8>, w: u32, h: u32) -> Image {
     Image::new(
-        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         rgba,
         TextureFormat::Rgba8UnormSrgb,
@@ -114,7 +127,10 @@ fn to_image(rgba: Vec<u8>, w: u32, h: u32) -> Image {
     )
 }
 
-pub fn load_tile_images(images: &mut Assets<Image>, theme: TileTheme) -> Result<TileImages, String> {
+pub fn load_tile_images(
+    images: &mut Assets<Image>,
+    theme: TileTheme,
+) -> Result<TileImages, String> {
     let dir = assets_dir().join("tiles").join(theme.dir());
     let front = dir.join("Front.svg");
     let mut make = |t: Tile| -> Result<Handle<Image>, String> {
@@ -126,12 +142,19 @@ pub fn load_tile_images(images: &mut Assets<Image>, theme: TileTheme) -> Result<
     for t in Tile::all_kinds() {
         kinds.push(make(t)?);
     }
-    let reds = [make(Tile::red_five(Suit::Man))?, make(Tile::red_five(Suit::Pin))?, make(Tile::red_five(Suit::Sou))?];
+    let reds = [
+        make(Tile::red_five(Suit::Man))?,
+        make(Tile::red_five(Suit::Pin))?,
+        make(Tile::red_five(Suit::Sou))?,
+    ];
     let back_rgba = rasterize(&[&dir.join("Back.svg")], TILE_PX_W, TILE_PX_H)?;
     let back = images.add(to_image(back_rgba, TILE_PX_W, TILE_PX_H));
     Ok(TileImages { kinds, reds, back })
 }
 
 pub fn load_fonts(server: &AssetServer) -> Fonts {
-    Fonts { regular: server.load("fonts/NotoSansJP-Regular.otf"), bold: server.load("fonts/NotoSansJP-Bold.otf") }
+    Fonts {
+        regular: server.load("fonts/NotoSansJP-Regular.otf"),
+        bold: server.load("fonts/NotoSansJP-Bold.otf"),
+    }
 }

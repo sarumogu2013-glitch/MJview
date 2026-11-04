@@ -15,7 +15,13 @@
 | A2 | 注釈付けと学習・評価スクリプト（`training/`） | ツールを用意済み（合成データで動作確認） |
 | A3 | 解像度ごとの精度評価CLI | ツールを用意済み（合成データで動作確認） |
 | A4 | カメラの条件を決める | A1〜A3 の結果待ち |
-| B〜C | 本体（Rust / Bevy） | 未着手 |
+| B1 | ワークスペース・卓状態・操作ログ・Undo・サーバー⇔クライアント通信 | 済み（通信のテストあり） |
+| B2 | 出力ウィンドウ・対局画面レイアウト | 済み（OBS での取り込みは実機で確認が必要） |
+| B3 | 局進行・残り牌数・ドラ | 済み |
+| B4 | アガリ入力 → 面子分解 → mahc → プレビュー → 放送、Python `mahjong` との突き合わせ | 済み（800件一致） |
+| B5 | 選手用画面ロール（サーバー側で情報を絞る） | 済み（通信内容の記録テストあり） |
+| B6〜B9 | 顔カメラ・ディレイ・演出・設定UI・リリース | 未着手 |
+| C | カメラ導入と自動読み取り | 段階Aの後 |
 
 ## ディレクトリ
 
@@ -23,4 +29,30 @@
 |---|---|
 | `docs/` | 設計書 |
 | `assets/tiles/` | 牌画像（FluffyStuff/riichi-mahjong-tiles、CC0） |
+| `crates/core/` | 卓状態・ルール・局進行・点数計算・操作ログ・通信の型 |
+| `crates/server/` | 処理サーバー `janscope-server`（ノートPC） |
+| `crates/netclient/` | クライアント側の接続（自動再接続・時刻合わせ） |
+| `crates/client/` | 配信クライアント `janscope-client`（出力・操作・選手用画面） |
+| `assets/fonts/` | Noto Sans JP（OFL） |
+| `tools/` | 開発用スクリプト（点数計算の突き合わせケース生成） |
 | `training/` | 牌認識の学習・評価ツール（Python。配布物には含めない）。使い方は [training/README.md](training/README.md) |
+
+## 動かし方（開発中）
+
+```sh
+# サーバー（ノートPC）: 接続コードが表示される
+cargo run --release -p janscope-server -- --port 47800
+
+# 配信クライアント（配信用PC）: 操作ウィンドウ＋出力ウィンドウ（1920×1080、OBS のゲームキャプチャで取り込む）
+cargo run --release -p janscope-client -- --server <サーバーのIP>:47800 --code <接続コード>
+
+# 選手用画面（配信用PCの別モニター、別プロセスで起動）
+cargo run --release -p janscope-client -- --server <IP>:47800 --code <接続コード> --role player --fullscreen --monitor 1
+
+# サーバーなしで画面だけ確認（見本の状態）
+cargo run -p janscope-client -- --demo
+```
+
+主なキー: テンキー `−` / `+` で残り牌数、`F1`〜`F4` で選手画面の手動切替（`F5` で自動）、`Ctrl+Z` / `Ctrl+Y` で取り消し・やり直し。
+
+テスト: `cargo test --workspace`

@@ -14,6 +14,28 @@ JanScope 本体は AGPL-3.0（[LICENSE](LICENSE)）。同梱・使用してい�
   > This work is in the public domain. For more information, visit https://creativecommons.org/publicdomain/zero/1.0/.
 - 過去版は CC BY 4.0 だったため、念のためクレジットを記載する: Tiles by FluffyStuff
 
+### フォント: Noto Sans JP（notofonts/noto-cjk）
+
+- 取得元: https://github.com/notofonts/noto-cjk （`Sans/SubsetOTF/JP/`）
+- 取得したコミット: `f8d157532fbfaeda587e826d4cd5b21a49186f7c`
+- 置き場所: `assets/fonts/NotoSansJP-Regular.otf`, `assets/fonts/NotoSansJP-Bold.otf`
+- ライセンス: SIL Open Font License 1.1（全文を `assets/fonts/LICENSE-OFL.txt` に同梱）
+  - フォント単体での販売は禁止。本ソフトに同梱して配布するのは可
+  - 改変する場合は予約フォント名（Noto）を使わない
+
+## 本体（Rust）の主な依存
+
+| crate | ライセンス | 用途 |
+|---|---|---|
+| mahc 2.2.0 | BSD-3-Clause | 点数計算（役・符） |
+| bevy 0.20 | MIT OR Apache-2.0 | 描画・ウィンドウ |
+| bevy_egui 0.43 / egui 0.36 | MIT（egui は MIT OR Apache-2.0） | 操作ウィンドウ |
+| resvg 0.49 | Apache-2.0 OR MIT | 牌画像（SVG）のラスタライズ |
+| tokio / tokio-tungstenite / futures-util | MIT | 通信 |
+| serde / serde_json / thiserror / rand / tracing | MIT OR Apache-2.0 | 共通 |
+
+依存を追加するたびに AGPL-3.0 との両立を確認する（`cargo tree` で一覧できる）。
+
 ## 学習・評価ツール（`training/`）の依存
 
 配布物（Windows zip）には含めない。開発時のみ使う。

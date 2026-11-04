@@ -20,5 +20,5 @@ bevy = { version = "=0.20.1", default-features = false, features = [
     "ui_api", "ui_bevy_render", "2d_bevy_render", "bevy_window", "bevy_text", "png",
     "keyboard", "mouse",
 ] }
-bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
+bevy_egui = { version = "=0.43.1", default-features = false, features = ["render"] }
 resvg = "0.49"
