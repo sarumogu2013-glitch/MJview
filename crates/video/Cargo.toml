@@ -1,6 +1,6 @@
 [package]
 name = "janscope-video"
-description = "JanScope 顔カメラの取り込み（FFmpeg を別プロセスで起動、MJPEG で受け取る）"
+description = "JanScope 映像まわり: 顔カメラの取り込み（FFmpeg を別プロセスで起動）と OBS 連携（obs-websocket）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,4 +8,13 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
 zune-jpeg = "0.5"
+sha2 = "0.11"
+base64 = "0.23"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
