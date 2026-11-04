@@ -1,7 +1,24 @@
 [package]
 name = "janscope-client"
+description = "JanScope 配信クライアント（出力ウィンドウ・操作ウィンドウ・選手用画面）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "janscope-client"
+path = "src/main.rs"
 
 [dependencies]
+janscope-core.workspace = true
+janscope-netclient.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bevy = { version = "=0.20.1", default-features = false, features = [
+    "default_app", "std", "multi_threaded", "bevy_winit", "x11",
+    "ui_api", "ui_bevy_render", "2d_bevy_render", "bevy_window", "bevy_text", "png",
+    "keyboard", "mouse",
+] }
+bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
+resvg = "0.49"

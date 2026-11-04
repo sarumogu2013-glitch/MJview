@@ -1,0 +1,808 @@
+//! 操作ウィンドウ（設計書 4.4・4.5）。オペレーター・入力担当が使う。egui で描く。
+//!
+//! 操作ウィンドウは常にライブ（遅延なし）。アガリは「プレビュー → 放送に出す」の2段階で、
+//! 計算結果を確かめてから初めて出力に出る。
+
+use std::collections::HashMap;
+
+use bevy::prelude::*;
+use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
+use janscope_core::protocol::ClientRole;
+use janscope_core::rules::GameConfig;
+use janscope_core::scoring::{Meld, MeldKind, WinInput, fmt_pts};
+use janscope_core::state::{AbortiveKind, Action, DrawKind, KanKind, Phase, Player, TableState};
+use janscope_core::tile::{SeatId, Tile, Wind};
+
+use crate::assets::TileImages;
+use crate::net::{Link, Net, Table};
+use crate::output::{FaceSelect, WinShow};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PaletteTarget {
+    #[default]
+    Closed,
+    Meld,
+    Ura,
+    Dora,
+    KanDora,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DrawChoice {
+    Exhaustive,
+    Nagashi,
+    Abortive(AbortiveKind),
+}
+
+#[derive(Resource)]
+pub struct OperatorUi {
+    fonts_set: bool,
+    tex: HashMap<String, egui::TextureId>,
+    // 半荘開始
+    presets: Vec<GameConfig>,
+    preset: usize,
+    names: [String; 4],
+    affiliations: [String; 4],
+    chiicha: u8,
+    // 局開始
+    dice: [[u8; 2]; 2],
+    dice_second: bool,
+    wall_direct: u32,
+    // 槓
+    kan_seat: u8,
+    kan_kind: KanKind,
+    kan_dora: Option<Tile>,
+    // ドラの入力
+    dora_edit: Vec<Tile>,
+    // 流局
+    tenpai: [bool; 4],
+    nagashi: [bool; 4],
+    draw_choice: DrawChoice,
+    // 手動修正
+    adjust: [i32; 4],
+    adjust_reason: String,
+    round_fix: (Wind, u8, u32, u32),
+    // アガリ入力
+    win: WinInput,
+    target: PaletteTarget,
+    meld_kind: MeldKind,
+    meld_buf: Vec<Tile>,
+    pending: Vec<WinInput>,
+    preview_id: Option<u64>,
+    confirm_end: bool,
+}
+
+impl Default for OperatorUi {
+    fn default() -> Self {
+        OperatorUi {
+            fonts_set: false,
+            tex: HashMap::new(),
+            presets: GameConfig::presets(),
+            preset: 0,
+            names: ["選手A", "選手B", "選手C", "選手D"].map(String::from),
+            affiliations: Default::default(),
+            chiicha: 0,
+            dice: [[1, 1], [1, 1]],
+            dice_second: false,
+            wall_direct: 0,
+            kan_seat: 0,
+            kan_kind: KanKind::Ankan,
+            kan_dora: None,
+            dora_edit: vec![],
+            tenpai: [false; 4],
+            nagashi: [false; 4],
+            draw_choice: DrawChoice::Exhaustive,
+            adjust: [0; 4],
+            adjust_reason: String::new(),
+            round_fix: (Wind::East, 1, 0, 0),
+            win: empty_win(),
+            target: PaletteTarget::Closed,
+            meld_kind: MeldKind::Pon,
+            meld_buf: vec![],
+            pending: vec![],
+            preview_id: None,
+            confirm_end: false,
+        }
+    }
+}
+
+fn empty_win() -> WinInput {
+    WinInput {
+        winner: SeatId(0),
+        loser: Some(SeatId(1)),
+        closed: vec![],
+        melds: vec![],
+        win_tile: Tile::new(0),
+        riichi: false,
+        double_riichi: false,
+        ippatsu: false,
+        haitei: false,
+        rinshan: false,
+        chankan: false,
+        tenhou: false,
+        ura_indicators: vec![],
+        pao: None,
+    }
+}
+
+/// 日本語フォント（Noto Sans JP）を egui に入れる。
+fn set_fonts(ctx: &egui::Context) {
+    let path = crate::assets::assets_dir().join("fonts/NotoSansJP-Regular.otf");
+    let Ok(bytes) = std::fs::read(&path) else {
+        warn!("フォントが読めません: {}", path.display());
+        return;
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert("noto_jp".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+    for fam in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(fam).or_default().insert(0, "noto_jp".into());
+    }
+    ctx.set_fonts(fonts);
+    ctx.style_mut(|s| {
+        s.text_styles.iter_mut().for_each(|(_, f)| f.size *= 1.15);
+        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    });
+}
+
+fn seat_name(s: &TableState, seat: SeatId) -> String {
+    format!("{} {}", seat.label(), s.seats[seat.index()].player.name)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn operator_ui(
+    mut contexts: EguiContexts,
+    mut ui_state: ResMut<OperatorUi>,
+    mut table: ResMut<Table>,
+    net: Res<Net>,
+    tiles: Option<Res<TileImages>>,
+    mut face: ResMut<FaceSelect>,
+    mut win_show: ResMut<WinShow>,
+    keys: Res<ButtonInput<KeyCode>>,
+    role: Res<crate::Role>,
+) -> Result {
+    let Some(tiles) = tiles else { return Ok(()) };
+    if ui_state.tex.is_empty() {
+        for t in palette_tiles() {
+            let id = contexts.add_image(EguiTextureHandle::Strong(tiles.get(t)));
+            ui_state.tex.insert(t.to_string(), id);
+        }
+        let id = contexts.add_image(EguiTextureHandle::Strong(tiles.back.clone()));
+        ui_state.tex.insert("back".into(), id);
+    }
+    let ctx = contexts.ctx_mut()?;
+    if !ui_state.fonts_set {
+        set_fonts(ctx);
+        ui_state.fonts_set = true;
+    }
+    let u = &mut *ui_state;
+
+    // 専用キー（文字入力中は無効）
+    if !ctx.egui_wants_keyboard_input() {
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        if keys.just_pressed(KeyCode::NumpadSubtract) {
+            net.act(Action::WallDecrement);
+        }
+        if keys.just_pressed(KeyCode::NumpadAdd) {
+            net.act(Action::WallIncrement);
+        }
+        if ctrl && keys.just_pressed(KeyCode::KeyZ) {
+            net.undo();
+        }
+        if ctrl && keys.just_pressed(KeyCode::KeyY) {
+            net.redo();
+        }
+        for (i, k) in [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4].iter().enumerate() {
+            if keys.just_pressed(*k) {
+                face.manual = Some(SeatId(i as u8));
+            }
+        }
+        if keys.just_pressed(KeyCode::F5) {
+            face.manual = None;
+        }
+    }
+
+    // 上部: 接続状態・Undo/Redo・バージョン
+    egui::TopBottomPanel::top("top").show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            match &table.link {
+                Link::Connected => ui.colored_label(egui::Color32::LIGHT_GREEN, "● 接続中"),
+                Link::Connecting => ui.colored_label(egui::Color32::YELLOW, "● 接続しています…"),
+                Link::Disconnected(r) => ui.colored_label(egui::Color32::RED, egui::RichText::new(format!("■ 切断中（再接続しています）: {r}")).size(22.0).strong()),
+                Link::Rejected(r) => ui.colored_label(egui::Color32::RED, egui::RichText::new(format!("■ 接続を拒否されました: {r}")).size(22.0).strong()),
+            };
+            ui.separator();
+            ui.label(format!("ロール: {}", role.0.name_ja()));
+            if let Some(by) = table.last_by.filter(|b| *b != role.0) {
+                ui.colored_label(egui::Color32::LIGHT_BLUE, format!("（最後の操作: {}）", by.name_ja()));
+            }
+            let (cu, cr) = table.full.as_ref().map(|f| (f.can_undo, f.can_redo)).unwrap_or((false, false));
+            if ui.add_enabled(cu, egui::Button::new("↶ 取り消し (Ctrl+Z)")).clicked() {
+                net.undo();
+            }
+            if ui.add_enabled(cr, egui::Button::new("↷ やり直し (Ctrl+Y)")).clicked() {
+                net.redo();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("JanScope {}  遅延 {}ms", janscope_core::VERSION, table.rtt_ms / 2));
+            });
+        });
+        if let Some(e) = table.last_error.clone() {
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::from_rgb(255, 140, 100), format!("⚠ {e}"));
+                if ui.small_button("閉じる").clicked() {
+                    table.last_error = None;
+                }
+            });
+        }
+        for n in table.notices.clone() {
+            ui.colored_label(egui::Color32::LIGHT_BLUE, n);
+        }
+    });
+
+    let Some(state) = table.full.as_ref().map(|f| f.state.clone()) else {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("サーバーからの状態を待っています");
+        });
+        return Ok(());
+    };
+
+    // 左: 卓の状態
+    egui::SidePanel::left("status").default_width(360.0).show(ctx, |ui| {
+        ui.heading(match state.phase {
+            Phase::Setup => "対局前".into(),
+            Phase::GameOver => "終局".into(),
+            _ => format!("{} {}本場 供託{}", state.round_label(), state.honba, state.kyotaku),
+        });
+        egui::Grid::new("scores").striped(true).show(ui, |ui| {
+            for seat in SeatId::ALL {
+                let st = &state.seats[seat.index()];
+                ui.label(format!("{}{}", state.seat_wind(seat).name_ja(), if state.dealer() == seat { "親" } else { "" }));
+                ui.label(&st.player.name);
+                ui.label(egui::RichText::new(fmt_pts(st.score)).strong());
+                let d = state.last_deltas[seat.index()];
+                ui.label(if d != 0 { crate::ui_kit::delta_text(d) } else { String::new() });
+                ui.label(if st.riichi { "リーチ" } else { "" });
+                ui.end_row();
+            }
+        });
+        if state.phase == Phase::InHand {
+            ui.label(egui::RichText::new(format!("残り {}", state.wall_remaining)).size(28.0).strong());
+        }
+        if let Some(fr) = &state.final_results {
+            ui.separator();
+            ui.heading("最終結果");
+            for r in fr {
+                ui.label(format!("{}位 {} {} ({:+.1})", r.rank, state.seats[r.seat.index()].player.name, fmt_pts(r.score), r.points));
+            }
+        }
+        ui.separator();
+        ui.label("選手画面（F1〜F4 で手動、F5 で自動）");
+        ui.horizontal(|ui| {
+            for seat in SeatId::ALL {
+                let sel = face.manual == Some(seat);
+                if ui.selectable_label(sel, format!("F{} {}", seat.0 + 1, state.seats[seat.index()].player.name)).clicked() {
+                    face.manual = Some(seat);
+                }
+            }
+            if ui.selectable_label(face.manual.is_none(), "自動").clicked() {
+                face.manual = None;
+            }
+        });
+        if !win_show.records.is_empty() && ui.button("アガリ演出を閉じる").clicked() {
+            win_show.records.clear();
+        }
+        ui.separator();
+        ui.collapsing("局の履歴", |ui| {
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                for h in state.history.iter().rev() {
+                    let what = match &h.outcome {
+                        janscope_core::state::HandOutcome::Win(ws) => ws
+                            .iter()
+                            .map(|w| format!("{} {} {}", state.seats[w.input.winner.index()].player.name, w.score.han_fu_text(), w.score.points_text()))
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                        janscope_core::state::HandOutcome::Draw { .. } => "流局".into(),
+                        janscope_core::state::HandOutcome::Adjust { reason } => format!("調整: {reason}"),
+                    };
+                    ui.label(format!("{}{}局{}本場 {}", h.wind.name_ja(), h.number, h.honba, what));
+                }
+            });
+        });
+    });
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| match state.phase {
+            Phase::Setup | Phase::GameOver => setup_panel(ui, u, &net, &state),
+            Phase::BetweenHands => {
+                hand_start_panel(ui, u, &net, &state);
+                ui.separator();
+                fix_panel(ui, u, &net, &state);
+            }
+            Phase::InHand => {
+                in_hand_panel(ui, u, &net, &state);
+                ui.separator();
+                win_panel(ui, u, &net, &mut table, &state);
+                ui.separator();
+                draw_panel(ui, u, &net, &state);
+                ui.separator();
+                fix_panel(ui, u, &net, &state);
+            }
+        });
+    });
+    Ok(())
+}
+
+fn palette_tiles() -> Vec<Tile> {
+    let mut v: Vec<Tile> = Tile::all_kinds().collect();
+    v.extend(["0m", "0p", "0s"].iter().map(|s| s.parse::<Tile>().unwrap()));
+    v
+}
+
+/// 牌パレット。クリックした牌を返す。
+fn palette(ui: &mut egui::Ui, u: &OperatorUi, w: f32, red: bool) -> Option<Tile> {
+    let mut clicked = None;
+    let rows: [Vec<Tile>; 4] = [
+        (0..9).map(Tile::new).collect(),
+        (9..18).map(Tile::new).collect(),
+        (18..27).map(Tile::new).collect(),
+        (27..34).map(Tile::new).collect(),
+    ];
+    for (ri, row) in rows.iter().enumerate() {
+        ui.horizontal(|ui| {
+            for t in row {
+                if tile_button(ui, u, *t, w).clicked() {
+                    clicked = Some(*t);
+                }
+            }
+            if red && ri < 3 {
+                let r: Tile = ["0m", "0p", "0s"][ri].parse().unwrap();
+                ui.add_space(8.0);
+                if tile_button(ui, u, r, w).on_hover_text("赤5").clicked() {
+                    clicked = Some(r);
+                }
+            }
+        });
+    }
+    clicked
+}
+
+fn tile_button(ui: &mut egui::Ui, u: &OperatorUi, t: Tile, w: f32) -> egui::Response {
+    match u.tex.get(&t.to_string()) {
+        Some(id) => ui
+            .add(egui::Button::image(egui::Image::new(egui::load::SizedTexture::new(*id, [w, w * 4.0 / 3.0]))))
+            .on_hover_text(t.name_ja()),
+        None => ui.button(t.to_string()),
+    }
+}
+
+/// 牌の列（クリックで取り除く）。
+fn tile_row(ui: &mut egui::Ui, u: &OperatorUi, tiles: &mut Vec<Tile>, w: f32) {
+    let mut remove = None;
+    ui.horizontal_wrapped(|ui| {
+        if tiles.is_empty() {
+            ui.weak("（なし）");
+        }
+        for (i, t) in tiles.iter().enumerate() {
+            if tile_button(ui, u, *t, w).on_hover_text("クリックで取り除く").clicked() {
+                remove = Some(i);
+            }
+        }
+    });
+    if let Some(i) = remove {
+        tiles.remove(i);
+    }
+}
+
+fn seat_combo(ui: &mut egui::Ui, id: &str, s: &TableState, seat: &mut SeatId) {
+    egui::ComboBox::from_id_salt(id).selected_text(seat_name(s, *seat)).show_ui(ui, |ui| {
+        for x in SeatId::ALL {
+            ui.selectable_value(seat, x, seat_name(s, x));
+        }
+    });
+}
+
+fn setup_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    ui.heading("半荘を始める");
+    egui::ComboBox::from_label("ルール").selected_text(u.presets[u.preset].name.clone()).show_ui(ui, |ui| {
+        for (i, p) in u.presets.iter().enumerate() {
+            ui.selectable_value(&mut u.preset, i, p.name.clone());
+        }
+    });
+    let c = &u.presets[u.preset];
+    ui.weak(format!(
+        "持ち点 {} / 返し {} / ウマ {}・{} / 赤{} / {}",
+        fmt_pts(c.start_points),
+        fmt_pts(c.return_points),
+        c.uma[1] / 1000,
+        c.uma[0] / 1000,
+        c.red_fives,
+        if c.length == janscope_core::rules::GameLength::Hanchan { "東南戦" } else { "東風戦" }
+    ));
+    ui.label("ルールの細かい編集は設定画面（段階B8）で行います");
+    egui::Grid::new("players").show(ui, |ui| {
+        ui.label("席");
+        ui.label("選手名");
+        ui.label("所属（任意）");
+        ui.label("起家");
+        ui.end_row();
+        for i in 0..4 {
+            ui.label(format!("{}", SeatId(i as u8).label()));
+            ui.text_edit_singleline(&mut u.names[i]);
+            ui.text_edit_singleline(&mut u.affiliations[i]);
+            ui.radio_value(&mut u.chiicha, i as u8, "");
+            ui.end_row();
+        }
+    });
+    let label = if state.phase == Phase::GameOver { "次の半荘を始める" } else { "半荘開始" };
+    if ui.button(egui::RichText::new(label).size(22.0)).clicked() {
+        let players: [Player; 4] = std::array::from_fn(|i| Player {
+            name: u.names[i].trim().to_string(),
+            affiliation: Some(u.affiliations[i].trim().to_string()).filter(|s| !s.is_empty()),
+        });
+        net.act(Action::StartGame { config: u.presets[u.preset].clone(), players, chiicha: SeatId(u.chiicha) });
+    }
+}
+
+fn dice_input(ui: &mut egui::Ui, d: &mut [u8; 2]) {
+    for v in d.iter_mut() {
+        ui.add(egui::DragValue::new(v).range(1..=6).speed(0.1));
+    }
+}
+
+fn hand_start_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    ui.heading(format!("{} {}本場 を始める", state.round_label(), state.honba));
+    ui.horizontal(|ui| {
+        ui.label("サイコロ");
+        dice_input(ui, &mut u.dice[0]);
+        if state.config.dice_twice {
+            ui.checkbox(&mut u.dice_second, "2度振り");
+            if u.dice_second {
+                dice_input(ui, &mut u.dice[1]);
+            }
+        }
+    });
+    if ui.button(egui::RichText::new("局開始（残り牌数をリセット）").size(22.0)).clicked() {
+        let mut dice = vec![(u.dice[0][0], u.dice[0][1])];
+        if state.config.dice_twice && u.dice_second {
+            dice.push((u.dice[1][0], u.dice[1][1]));
+        }
+        u.dora_edit.clear();
+        u.tenpai = [false; 4];
+        u.win = empty_win();
+        u.pending.clear();
+        net.act(Action::StartHand { dice });
+    }
+    ui.add_space(8.0);
+    if !u.confirm_end {
+        if ui.button("半荘をここで終了する…").clicked() {
+            u.confirm_end = true;
+        }
+    } else {
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::YELLOW, "本当に終了しますか？");
+            if ui.button("終了する").clicked() {
+                net.act(Action::EndGame);
+                u.confirm_end = false;
+            }
+            if ui.button("やめる").clicked() {
+                u.confirm_end = false;
+            }
+        });
+    }
+}
+
+fn in_hand_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("残り {}", state.wall_remaining)).size(26.0).strong());
+        if ui.button(egui::RichText::new("−1（テンキー −）").size(20.0)).clicked() {
+            net.act(Action::WallDecrement);
+        }
+        if ui.button("+1（テンキー +）").clicked() {
+            net.act(Action::WallIncrement);
+        }
+        ui.add(egui::DragValue::new(&mut u.wall_direct).range(0..=state.config.wall_start));
+        if ui.button("直接入力").clicked() {
+            net.act(Action::SetWallRemaining { value: u.wall_direct });
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("立直");
+        for seat in SeatId::ALL {
+            let r = state.seats[seat.index()].riichi;
+            if ui.add_enabled(!r, egui::Button::new(seat_name(state, seat))).clicked() {
+                net.act(Action::Riichi { seat });
+            }
+        }
+        ui.menu_button("取り消し", |ui| {
+            for seat in SeatId::ALL.into_iter().filter(|s| state.seats[s.index()].riichi) {
+                if ui.button(seat_name(state, seat)).clicked() {
+                    net.act(Action::CancelRiichi { seat });
+                    ui.close();
+                }
+            }
+        });
+    });
+    ui.collapsing("ドラ表示牌・槓", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("ドラ表示牌:");
+            { let mut v = std::mem::take(&mut u.dora_edit); tile_row(ui, u, &mut v, 24.0); u.dora_edit = v; }
+        });
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut u.target, PaletteTarget::Dora, "パレットでドラ表示牌を入力");
+            ui.radio_value(&mut u.target, PaletteTarget::KanDora, "槓ドラを選ぶ");
+        });
+        if u.dora_edit != state.dora_indicators && ui.button("ドラ表示牌を確定").clicked() {
+            net.act(Action::SetDora { tiles: u.dora_edit.clone() });
+        }
+        if ui.button("入力し直す").clicked() {
+            u.dora_edit.clear();
+        }
+        ui.horizontal(|ui| {
+            ui.label("槓:");
+            let mut seat = SeatId(u.kan_seat);
+            seat_combo(ui, "kan_seat", state, &mut seat);
+            u.kan_seat = seat.0;
+            ui.radio_value(&mut u.kan_kind, KanKind::Ankan, "暗槓");
+            ui.radio_value(&mut u.kan_kind, KanKind::Minkan, "大明槓");
+            ui.radio_value(&mut u.kan_kind, KanKind::Kakan, "加槓");
+            ui.label(format!("新ドラ: {}", u.kan_dora.map(|t| t.name_ja()).unwrap_or("なし".into())));
+            if ui.button("槓を入力（残り −1）").clicked() {
+                net.act(Action::Kan { seat, kind: u.kan_kind, new_dora_indicator: u.kan_dora.take() });
+            }
+        });
+        if matches!(u.target, PaletteTarget::Dora | PaletteTarget::KanDora) {
+            if let Some(t) = palette(ui, u, 26.0, false) {
+                if u.target == PaletteTarget::Dora {
+                    if u.dora_edit.len() < 5 {
+                        u.dora_edit.push(t);
+                    }
+                } else {
+                    u.kan_dora = Some(t);
+                }
+            }
+        }
+    });
+    if u.dora_edit.is_empty() && !state.dora_indicators.is_empty() {
+        u.dora_edit = state.dora_indicators.clone();
+    }
+}
+
+fn win_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, table: &mut Table, state: &TableState) {
+    ui.heading("アガリ入力");
+    ui.horizontal(|ui| {
+        ui.label("アガリ");
+        seat_combo(ui, "winner", state, &mut u.win.winner);
+        let mut tsumo = u.win.loser.is_none();
+        ui.radio_value(&mut tsumo, false, "ロン");
+        ui.radio_value(&mut tsumo, true, "ツモ");
+        if tsumo {
+            u.win.loser = None;
+        } else {
+            let mut l = u.win.loser.unwrap_or(u.win.winner.next());
+            ui.label("放銃");
+            seat_combo(ui, "loser", state, &mut l);
+            u.win.loser = Some(l);
+        }
+    });
+    if state.seats[u.win.winner.index()].riichi && !u.win.double_riichi {
+        u.win.riichi = true;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut u.win.riichi, "立直");
+        ui.checkbox(&mut u.win.double_riichi, "ダブル立直");
+        ui.checkbox(&mut u.win.ippatsu, "一発");
+        ui.checkbox(&mut u.win.haitei, if u.win.loser.is_none() { "海底" } else { "河底" });
+        ui.checkbox(&mut u.win.rinshan, "嶺上開花");
+        ui.checkbox(&mut u.win.chankan, "槍槓");
+        ui.checkbox(&mut u.win.tenhou, "天和・地和");
+        if state.wall_remaining == 0 {
+            ui.weak("（残り0なので海底・河底は自動で付きます）");
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("入力先:");
+        ui.radio_value(&mut u.target, PaletteTarget::Closed, "手牌（門前、アガリ牌は最後に）");
+        ui.radio_value(&mut u.target, PaletteTarget::Meld, "副露");
+        ui.radio_value(&mut u.target, PaletteTarget::Ura, "裏ドラ表示牌");
+    });
+    ui.horizontal(|ui| {
+        ui.label(format!("手牌 {}枚:", u.win.closed.len()));
+        { let mut v = std::mem::take(&mut u.win.closed); tile_row(ui, u, &mut v, 30.0); u.win.closed = v; }
+    });
+    if let Some(&last) = u.win.closed.last() {
+        u.win.win_tile = last;
+        ui.label(format!("アガリ牌: {}（最後に入れた牌）", last.name_ja()));
+    }
+    ui.horizontal(|ui| {
+        ui.label("副露:");
+        let mut remove = None;
+        for (i, m) in u.win.melds.iter().enumerate() {
+            let s: String = m.tiles.iter().map(|t| t.to_string()).collect::<Vec<_>>().join("");
+            if ui.button(format!("{:?} {s} ×", m.kind)).clicked() {
+                remove = Some(i);
+            }
+        }
+        if let Some(i) = remove {
+            u.win.melds.remove(i);
+        }
+    });
+    if u.target == PaletteTarget::Meld {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut u.meld_kind, MeldKind::Chi, "チー");
+            ui.radio_value(&mut u.meld_kind, MeldKind::Pon, "ポン");
+            ui.radio_value(&mut u.meld_kind, MeldKind::Minkan, "明槓");
+            ui.radio_value(&mut u.meld_kind, MeldKind::Ankan, "暗槓");
+            ui.radio_value(&mut u.meld_kind, MeldKind::Kakan, "加槓");
+            ui.label("入力中:");
+            { let mut v = std::mem::take(&mut u.meld_buf); tile_row(ui, u, &mut v, 24.0); u.meld_buf = v; }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label("裏ドラ表示牌:");
+        { let mut v = std::mem::take(&mut u.win.ura_indicators); tile_row(ui, u, &mut v, 24.0); u.win.ura_indicators = v; }
+    });
+    if matches!(u.target, PaletteTarget::Closed | PaletteTarget::Meld | PaletteTarget::Ura) {
+        if let Some(t) = palette(ui, u, 34.0, state.config.red_fives > 0) {
+            match u.target {
+                PaletteTarget::Closed => {
+                    if u.win.closed.len() < 14 {
+                        u.win.closed.push(t);
+                    }
+                }
+                PaletteTarget::Meld => {
+                    u.meld_buf.push(t);
+                    let need = if u.meld_kind.is_kan() { 4 } else { 3 };
+                    if u.meld_kind == MeldKind::Pon || u.meld_kind.is_kan() {
+                        u.meld_buf = vec![t; need];
+                    }
+                    if u.meld_kind == MeldKind::Chi && u.meld_buf.len() == 1 && t.number() <= 7 && !t.is_honor() {
+                        u.meld_buf = vec![t, Tile::new(t.kind() + 1), Tile::new(t.kind() + 2)];
+                    }
+                    if u.meld_buf.len() >= need {
+                        let from = if u.meld_kind == MeldKind::Ankan { None } else { Some(u.win.winner.next()) };
+                        u.win.melds.push(Meld { kind: u.meld_kind, tiles: u.meld_buf.drain(..).take(need).collect(), from });
+                    }
+                }
+                PaletteTarget::Ura => {
+                    if u.win.ura_indicators.len() < 5 {
+                        u.win.ura_indicators.push(t);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button(egui::RichText::new("プレビュー（計算だけ）").size(20.0)).clicked() {
+            u.preview_id = Some(net.preview(u.win.clone()));
+            table.preview = None;
+        }
+        if ui.button("手牌をクリア").clicked() {
+            u.win.closed.clear();
+            u.win.melds.clear();
+            u.win.ura_indicators.clear();
+            table.preview = None;
+        }
+    });
+    if let (Some(id), Some((rid, res))) = (u.preview_id, &table.preview) {
+        if id == *rid {
+            match res {
+                Ok(sc) => {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.label(egui::RichText::new(format!("{}  {}", sc.han_fu_text(), sc.points_text())).size(26.0).strong());
+                        ui.label(sc.yaku.iter().map(|y| if y.yakuman > 0 { y.name.clone() } else { format!("{} {}翻", y.name, y.han) }).collect::<Vec<_>>().join("、"));
+                        if sc.dora + sc.aka + sc.ura > 0 {
+                            ui.label(format!("ドラ{} 赤{} 裏{}", sc.dora, sc.aka, sc.ura));
+                        }
+                        ui.weak(sc.fu_items.iter().map(|f| format!("{} {}", f.name, f.fu)).collect::<Vec<_>>().join(" / "));
+                        ui.horizontal(|ui| {
+                            if ui.button(egui::RichText::new("▶ 放送に出す（確定）").size(22.0).color(egui::Color32::YELLOW)).clicked() {
+                                let mut wins = u.pending.clone();
+                                wins.push(u.win.clone());
+                                net.act(Action::Win { wins });
+                                u.pending.clear();
+                                u.win = empty_win();
+                                u.preview_id = None;
+                            }
+                            if u.win.loser.is_some() && ui.button("ダブロン: このアガリを保留して次を入力").clicked() {
+                                u.pending.push(u.win.clone());
+                                let loser = u.win.loser;
+                                u.win = empty_win();
+                                u.win.loser = loser;
+                                u.preview_id = None;
+                            }
+                        });
+                    });
+                }
+                Err(e) => {
+                    ui.colored_label(egui::Color32::from_rgb(255, 140, 100), format!("計算できません: {e}"));
+                }
+            }
+        }
+    }
+    if !u.pending.is_empty() {
+        ui.label(format!("保留中のアガリ: {}件（ダブロン）", u.pending.len()));
+        if ui.button("保留を取り消す").clicked() {
+            u.pending.clear();
+        }
+    }
+}
+
+fn draw_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    ui.collapsing("流局", |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut u.draw_choice, DrawChoice::Exhaustive, "荒牌流局");
+            ui.radio_value(&mut u.draw_choice, DrawChoice::Nagashi, "流し満貫");
+            for k in [AbortiveKind::KyuushuKyuuhai, AbortiveKind::SuufonRenda, AbortiveKind::SuukanSanra, AbortiveKind::SuuchaRiichi, AbortiveKind::SanchaHou] {
+                ui.radio_value(&mut u.draw_choice, DrawChoice::Abortive(k), k.name_ja());
+            }
+        });
+        if !matches!(u.draw_choice, DrawChoice::Abortive(_)) {
+            ui.horizontal(|ui| {
+                ui.label("テンパイ:");
+                for seat in SeatId::ALL {
+                    ui.checkbox(&mut u.tenpai[seat.index()], seat_name(state, seat));
+                }
+            });
+        }
+        if u.draw_choice == DrawChoice::Nagashi {
+            ui.horizontal(|ui| {
+                ui.label("流し満貫:");
+                for seat in SeatId::ALL {
+                    ui.checkbox(&mut u.nagashi[seat.index()], seat_name(state, seat));
+                }
+            });
+        }
+        if ui.button(egui::RichText::new("流局を確定").size(20.0)).clicked() {
+            let tenpai: Vec<SeatId> = SeatId::ALL.into_iter().filter(|s| u.tenpai[s.index()]).collect();
+            let kind = match u.draw_choice {
+                DrawChoice::Exhaustive => DrawKind::Exhaustive,
+                DrawChoice::Nagashi => DrawKind::NagashiMangan(SeatId::ALL.into_iter().filter(|s| u.nagashi[s.index()]).collect()),
+                DrawChoice::Abortive(k) => DrawKind::Abortive(k),
+            };
+            net.act(Action::Draw { tenpai, kind });
+            u.tenpai = [false; 4];
+            u.nagashi = [false; 4];
+        }
+        if state.wall_remaining == 0 {
+            ui.colored_label(egui::Color32::YELLOW, "残り牌数が0です。アガリがなければ流局を入力してください");
+        }
+    });
+}
+
+fn fix_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    ui.collapsing("手動修正（点数・局・本場・供託）", |ui| {
+        ui.horizontal(|ui| {
+            for seat in SeatId::ALL {
+                ui.label(seat.label().to_string());
+                ui.add(egui::DragValue::new(&mut u.adjust[seat.index()]).speed(100.0).range(-200_000..=200_000));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("理由");
+            ui.text_edit_singleline(&mut u.adjust_reason);
+            if ui.button("点数を調整").clicked() {
+                net.act(Action::ManualAdjust { deltas: u.adjust, reason: u.adjust_reason.clone() });
+                u.adjust = [0; 4];
+                u.adjust_reason.clear();
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("現在の値を読み込む").clicked() {
+                u.round_fix = (state.round_wind, state.round_number, state.honba, state.kyotaku);
+            }
+            egui::ComboBox::from_id_salt("fix_wind").selected_text(u.round_fix.0.name_ja()).show_ui(ui, |ui| {
+                for w in Wind::ALL {
+                    ui.selectable_value(&mut u.round_fix.0, w, w.name_ja());
+                }
+            });
+            ui.add(egui::DragValue::new(&mut u.round_fix.1).range(1..=4).suffix("局"));
+            ui.add(egui::DragValue::new(&mut u.round_fix.2).range(0..=99).suffix("本場"));
+            ui.add(egui::DragValue::new(&mut u.round_fix.3).range(0..=99).prefix("供託"));
+            if ui.button("局・本場・供託を修正").clicked() {
+                let (wind, number, honba, kyotaku) = u.round_fix;
+                net.act(Action::SetRound { wind, number, honba, kyotaku });
+            }
+        });
+    });
+}
