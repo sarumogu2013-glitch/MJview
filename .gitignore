@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# 学習・評価の出力とデータ（大きいのでコミットしない）
+training/runs/
+training/data/
+training/datasets/
+*.pt
+*.onnx
+!training/models/README.md
+
+# Rust（段階B以降）
+target/

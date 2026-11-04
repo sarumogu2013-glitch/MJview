@@ -1,0 +1,24 @@
+# 学習・評価ツール（training/）の依存。配布物（Windows zip）には含めない。
+# ライセンスは導入時に確認済み。AGPL-3.0 と両立するもののみ（設計書 7章のライセンス方針）。
+#   ultralytics  AGPL-3.0        検出（YOLO）
+#   torch        BSD-3-Clause ほか（Apache-2.0, MIT 等の寛容なライセンスの組み合わせ）
+#   torchvision  BSD-3-Clause    分類（ResNet18 / MobileNetV3。重みは使わず初期化から学習）
+#   opencv       Apache-2.0
+#   numpy        BSD-3-Clause
+#   PyYAML       MIT
+#   Pillow       MIT-CMU (HPND)
+#   cairosvg     LGPL-3.0+       牌画像 SVG のラスタライズ（合成データ用）
+#   onnx         Apache-2.0      ONNX 書き出し
+#   onnxruntime  MIT             書き出したモデルの確認
+#   pytest       MIT             テスト
+ultralytics>=8.3
+torch>=2.3
+torchvision>=0.18
+opencv-python-headless>=4.9
+numpy>=1.26
+PyYAML>=6.0
+Pillow>=10.0
+cairosvg>=2.7
+onnx>=1.16
+onnxruntime>=1.18
+pytest>=8.0
