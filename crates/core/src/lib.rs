@@ -6,6 +6,7 @@ pub mod delay;
 pub mod engine;
 pub mod face;
 pub mod log;
+pub mod paifu;
 pub mod protocol;
 pub mod rules;
 pub mod scene;
