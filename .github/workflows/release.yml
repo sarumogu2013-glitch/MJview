@@ -12,12 +12,17 @@ on:
 permissions:
   contents: write
 
+env:
+  # Windows の Python は既定で cp1252 なので、日本語を出せるように UTF-8 にする
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 版とタグ
         shell: bash
         run: |
