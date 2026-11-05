@@ -18,7 +18,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 /// 既定の取得元
-pub const DEFAULT_REPO: &str = "sarumogu2013-glitch/MJviwe";
+pub const DEFAULT_REPO: &str = "sarumogu2013-glitch/MJview";
 pub const GITHUB_API: &str = "https://api.github.com";
 /// 配布物のフォルダに置く印。これがないフォルダ（開発中の target など）には適用しない
 pub const DIST_MARKER: &str = "VERSION.txt";
