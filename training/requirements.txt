@@ -1,5 +1,5 @@
 # 学習・評価ツール（training/）の依存。配布物（Windows zip）には含めない。
-# ライセンスは導入時に確認済み。AGPL-3.0 と両立するもののみ（設計書 7章のライセンス方針）。
+# ライセンスは導入時に確認済み。training/ は AGPL-3.0（Ultralytics を使うため。本体は MIT OR Apache-2.0）。
 #   ultralytics  AGPL-3.0        検出（YOLO）
 #   torch        BSD-3-Clause ほか（Apache-2.0, MIT 等の寛容なライセンスの組み合わせ）
 #   torchvision  BSD-3-Clause    分類（ResNet18 / MobileNetV3。重みは使わず初期化から学習）

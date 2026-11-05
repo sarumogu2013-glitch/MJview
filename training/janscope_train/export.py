@@ -28,7 +28,7 @@ def export_classifier(weights: Path, out: Path, opset: int = 17) -> Path:
         "input": {"width": CROP_W, "height": CROP_H, "layout": "NCHW", "color": "RGB",
                   "scale": 1 / 255, "mean": MEAN.tolist(), "std": STD.tolist()},
         "classes": list(CLASS_NAMES),
-        "license": "AGPL-3.0",
+        "license": "MIT OR Apache-2.0",
     }
     out.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return out

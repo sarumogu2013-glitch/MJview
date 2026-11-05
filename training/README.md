@@ -1,7 +1,8 @@
 # training/ — 牌認識の学習・評価ツール（段階A）
 
 設計書 10章「段階A：牌認識の実現性検証（カメラ不要）」のためのツール。
-**配布物（Windows zip）には含めない。**
+**配布物（Windows zip）には含めない。** このフォルダは AGPL-3.0（[LICENSE](LICENSE)、Ultralytics を使うため）。
+書き出した検出モデル（YOLO）も AGPL-3.0 なので、本体の zip とは別に配布する。分類モデルは MIT OR Apache-2.0。
 
 認識は2段構成（設計書 4.10）:
 

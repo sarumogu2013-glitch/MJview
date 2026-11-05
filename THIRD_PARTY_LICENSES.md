@@ -1,7 +1,7 @@
 # THIRD_PARTY_LICENSES
 
-JanScope 本体は AGPL-3.0（[LICENSE](LICENSE)）。同梱・使用している第三者の素材とソフトウェアを記載する。
-方針（設計書 7章）: ライセンスが明記され、AGPL-3.0 と両立するものだけを使う。表記がない・不明なものは使わない。
+JanScope 本体は MIT OR Apache-2.0（[LICENSE-MIT](LICENSE-MIT) / [LICENSE-APACHE](LICENSE-APACHE)）、`training/` は AGPL-3.0（[training/LICENSE](training/LICENSE)）。同梱・使用している第三者の素材とソフトウェアを記載する。
+方針: ライセンスが明記され、本体の MIT OR Apache-2.0 と両立する（寛容な）ものだけを本体に使う。表記がない・不明なものは使わない。
 
 ## 同梱している素材
 
@@ -34,7 +34,7 @@ JanScope 本体は AGPL-3.0（[LICENSE](LICENSE)）。同梱・使用してい�
 | tokio / tokio-tungstenite / futures-util | MIT | 通信 |
 | serde / serde_json / thiserror / rand / tracing | MIT OR Apache-2.0 | 共通 |
 
-依存を追加するたびに AGPL-3.0 との両立を確認する（`cargo tree` で一覧できる）。
+依存を追加するたびに、寛容なライセンス（MIT / Apache-2.0 / BSD / Zlib / ISC / Unicode / CC0 / OFL など）かを確認する。GPL・LGPL・AGPL のものは本体に入れない（`cargo tree` で一覧できる）。
 
 ## 学習・評価ツール（`training/`）の依存
 
@@ -56,5 +56,5 @@ JanScope 本体は AGPL-3.0（[LICENSE](LICENSE)）。同梱・使用してい�
 
 ## 学習済みモデル
 
-自前で学習したモデルの重みは AGPL-3.0 として公開する。既存の学習済み牌認識モデルは使わない。
+既存の学習済み牌認識モデルは使わない。自前で学習した検出モデル（YOLO）の重みは AGPL-3.0 として本体とは別に配布し、分類モデル（小型CNN）の重みは MIT OR Apache-2.0 とする。
 検出の学習の初期値に Ultralytics 配布の重み（yolo11n.pt 等、AGPL-3.0）を使う場合がある。

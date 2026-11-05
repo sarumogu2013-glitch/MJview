@@ -1,9 +1,16 @@
 # JanScope（仮称）
 
+> [!IMPORTANT]
+> ## このソフトウェアは AI で作成しました
+> **設計書をもとに、ソースコード・テスト・文書のほぼすべてを AI（Anthropic の Claude）が書いています。**
+> 人による網羅的なコードレビューは行っていません。点数計算はテスト（Python の `mahjong` ライブラリとの突き合わせなど）で確かめていますが、
+> **大会など本番で使う前に、必ず実際の環境で動作と計算結果を確認してください。** 不具合による損害について作者は責任を負いません（ライセンスの免責条項のとおり）。
+
+
 麻雀大会の中継システム。カメラで卓を「見て」、牌の自動読み取り・点数計算・中継画面の表示までを行う。
 
 - 設計書: [docs/DESIGN.md](docs/DESIGN.md)（0.19.0）
-- ライセンス: [AGPL-3.0](LICENSE)（同梱物の表記は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）
+- ライセンス: 下の「ライセンス」の節（同梱物の表記は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）
 
 ## 進み具合
 
@@ -60,3 +67,17 @@ cargo run -p janscope-client -- --demo
 顔カメラ（RTMP）を取り込むには ffmpeg が必要です。配布では LGPL ビルドの ffmpeg を `ffmpeg/ffmpeg.exe` として実行ファイルの隣に置きます（開発中は PATH の ffmpeg でも可）。設定は操作ウィンドウの「顔カメラ・OBS 連携・切替の設定」で変更し、`janscope-client.json` に保存されます。
 
 テスト: `cargo test --workspace`（RTMP のテストは ffmpeg がある環境でだけ動きます）
+
+## ライセンス
+
+| 対象 | ライセンス |
+|---|---|
+| 本体（`crates/` の Rust のコード、`tools/`、`docs/`、配布する実行ファイル） | **MIT OR Apache-2.0**（[LICENSE-MIT](LICENSE-MIT) / [LICENSE-APACHE](LICENSE-APACHE) のどちらかを選んで使えます） |
+| 牌認識の学習・評価ツール（`training/`） | AGPL-3.0（[training/LICENSE](training/LICENSE)）。Ultralytics YOLO（AGPL-3.0）を使うため |
+| 牌認識の検出モデル（YOLO で学習した重み） | AGPL-3.0。**本体の zip には入れず、別のファイルとして配布します** |
+| 牌認識の分類モデル（`training/` の小型CNN を初期化から学習した重み） | MIT OR Apache-2.0 |
+| 同梱の素材・依存 | それぞれのライセンス（[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）。牌画像 CC0、フォント OFL-1.1、mahc BSD-3-Clause など |
+
+- 再配布・改変・商用利用は、MIT か Apache-2.0 の条件（著作権表示とライセンス文を残すこと）を守れば自由です
+- 配布物に FFmpeg を同梱する場合は、FFmpeg の LGPL の条件に従います（本体は別プログラムとして呼ぶだけで、リンクしません）
+- 設計書 0.19.0 では全体を AGPL-3.0 としていましたが、緩いライセンスにする方針に変えました（本体の依存はすべて MIT/Apache/BSD/CC0/OFL で、AGPL のものは `training/` と検出モデルだけ）
