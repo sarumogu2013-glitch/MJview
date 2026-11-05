@@ -127,8 +127,12 @@ def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, default=ROOT / "dist")
     ap.add_argument("--rust-licenses", type=pathlib.Path, help="cargo about で作った依存ライセンスの HTML")
     ap.add_argument("--tag", help="リリースのタグ（v付き）。Cargo.toml の版と違えば止める")
+    ap.add_argument("--print-version", action="store_true", help="Cargo.toml の版を表示して終わる")
     a = ap.parse_args()
     version = workspace_version()
+    if a.print_version:
+        print(version)
+        return
     if a.tag and a.tag.lstrip("vV") != version:
         sys.exit(f"タグ {a.tag} と Cargo.toml の版 {version} が違います")
     z = build(a.bin_dir, a.suffix, a.out, a.rust_licenses, version)

@@ -1,10 +1,13 @@
-# タグ（v0.2.0 など）を push すると、Windows 用の zip を作って GitHub Releases に出す（設計書 9章）。
-# タグの版は Cargo.toml の [workspace.package] version と同じにすること（違うと止まる）。
+# Windows 用の zip を作って GitHub Releases に出す（設計書 9章）。
+# - タグ（v0.2.0 など）を push する、または
+# - Actions の画面から手で実行する（Cargo.toml の版で v<版> のタグを作る）
+# 版は Cargo.toml の [workspace.package] version。説明は CHANGELOG.md の同じ版の節。
 name: release
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,6 +18,20 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: 版とタグ
+        shell: bash
+        run: |
+          ver=$(python tools/package.py --print-version)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then tag="$GITHUB_REF_NAME"; else tag="v$ver"; fi
+          [ "$tag" = "v$ver" ] || { echo "タグ $tag と Cargo.toml の版 $ver が違います"; exit 1; }
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          # CHANGELOG.md の「## <版>」の節を説明にする
+          python - "$ver" > release-notes.md <<'PY'
+          import re, sys
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(r"^## " + re.escape(sys.argv[1]) + r"\s*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+          print(m.group(1).strip() if m else "JanScope " + sys.argv[1])
+          PY
       - name: Rust
         run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -28,13 +45,11 @@ jobs:
           tool: cargo-about
       - run: cargo about generate tools/about.hbs -o target/licenses.html
       - name: zip を作る
-        run: python tools/package.py --bin-dir target/release --suffix windows-x64 --rust-licenses target/licenses.html --tag "${{ github.ref_name }}"
+        run: python tools/package.py --bin-dir target/release --suffix windows-x64 --rust-licenses target/licenses.html --tag "$env:TAG"
       - name: Releases に出す
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
-          [ -n "$notes" ] || notes="JanScope $GITHUB_REF_NAME"
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 \
-            --title "JanScope $GITHUB_REF_NAME" --notes "$notes" --verify-tag
+          gh release create "$TAG" dist/*.zip dist/*.zip.sha256 \
+            --title "JanScope $TAG" --notes-file release-notes.md --target "$GITHUB_SHA"

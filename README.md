@@ -77,8 +77,9 @@ cargo run -p janscope-client -- --demo
 - 入れ替えで、設定（`janscope-client.json`）・`data/`・`ffmpeg/` は消えません
 - リリースの出し方:
   1. `Cargo.toml` の `[workspace.package] version` を上げてコミット
-  2. 同じ版のタグを打って push（例: `git tag -a v0.2.0 -m "変更点…" && git push origin v0.2.0`）。タグのメッセージがリリースの説明になります
-  3. GitHub Actions（`.github/workflows/release.yml`）がテスト → ビルド → `janscope-<版>-windows-x64.zip` と `.sha256` を Releases に出します
+  2. `CHANGELOG.md` に `## 0.2.0` の節を書く（これがリリースの説明になる）
+  3. GitHub の Actions →「release」→「Run workflow」で実行する（`v<版>` のタグも作られる）。または同じ版のタグ `v0.2.0` を push する
+  4. GitHub Actions（`.github/workflows/release.yml`）がテスト → ビルド → `janscope-<版>-windows-x64.zip` と `.sha256` を Releases に出します
 - 配布 zip を手元で作る: `python3 tools/package.py --bin-dir target/release --suffix windows-x64 --rust-licenses <cargo about の HTML>`
 
 ## ライセンス
