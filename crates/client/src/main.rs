@@ -17,6 +17,7 @@ mod operator;
 mod output;
 mod player_screen;
 mod program;
+mod replay;
 mod scenes;
 mod settings;
 mod theme;
@@ -150,6 +151,7 @@ fn main() {
     .init_resource::<program::Program>()
     .init_resource::<program::Delayed>()
     .init_resource::<scenes::Scenes>()
+    .init_resource::<replay::Replay>()
     .init_resource::<output::ScoreAnim>()
     .insert_resource(config::ClientConfig::load())
     .init_resource::<output::WinShow>()
@@ -184,6 +186,7 @@ fn main() {
                 Update,
                 (
                     program::release,
+                    replay::tick_replay,
                     scenes::update_scenes,
                     output::handle_overlays,
                     face::face_update,

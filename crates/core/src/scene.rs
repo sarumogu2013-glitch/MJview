@@ -19,6 +19,8 @@ pub enum SceneKind {
     FinalResult,
     /// 大会の通算順位
     Standings,
+    /// 牌譜再生（選手用画面には出さない）
+    Replay,
 }
 
 impl SceneKind {
@@ -30,6 +32,7 @@ impl SceneKind {
             SceneKind::Waiting => "待機・休憩".into(),
             SceneKind::FinalResult => "半荘結果".into(),
             SceneKind::Standings => "通算順位".into(),
+            SceneKind::Replay => "牌譜再生".into(),
         }
     }
 }

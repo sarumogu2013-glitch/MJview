@@ -105,6 +105,7 @@ pub fn rebuild_output(
     time: Res<Time>,
     scenes: Res<crate::scenes::Scenes>,
     mut anim: ResMut<ScoreAnim>,
+    replay: Res<crate::replay::Replay>,
 ) {
     let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else {
         return;
@@ -140,7 +141,15 @@ pub fn rebuild_output(
             scenes.sw.program,
             &scenes.telop,
             &scenes.waiting_text,
-            step
+            step,
+            (
+                replay.hand,
+                replay.step,
+                replay.viewpoint,
+                replay.open_all,
+                replay.file.len(),
+                replay.paifu.is_some()
+            )
         )
     );
     if key == dirty.last_key {
@@ -190,6 +199,7 @@ pub fn rebuild_output(
                         crate::scenes::draw_waiting(p, &kit, &scenes.waiting_text)
                     }
                     SceneKind::FinalResult => crate::scenes::draw_final(p, &kit, s, &face),
+                    SceneKind::Replay => crate::replay::draw_replay(p, &kit, &replay),
                     SceneKind::Standings => crate::scenes::draw_standings(
                         p,
                         &kit,

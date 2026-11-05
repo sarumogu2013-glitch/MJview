@@ -201,6 +201,7 @@ pub fn operator_ui(
     mut scenes: ResMut<crate::scenes::Scenes>,
     mut settings: ResMut<crate::settings::SettingsUi>,
     lib: Res<crate::settings::Library>,
+    mut replay: ResMut<crate::replay::Replay>,
 ) -> Result {
     let Some(tiles) = tiles else { return Ok(()) };
     if ui_state.tex.is_empty() {
@@ -244,6 +245,17 @@ pub fn operator_ui(
         {
             if keys.just_pressed(*k) {
                 face.sw.manual(SeatId(i as u8), time.elapsed_secs_f64());
+            }
+        }
+        if scenes.sw.program == janscope_core::scene::SceneKind::Replay && replay.paifu.is_some() {
+            if keys.just_pressed(KeyCode::ArrowRight) {
+                replay.step_by(1);
+            }
+            if keys.just_pressed(KeyCode::ArrowLeft) {
+                replay.step_by(-1);
+            }
+            if keys.just_pressed(KeyCode::Space) {
+                replay.playing = !replay.playing;
             }
         }
         if keys.just_pressed(KeyCode::F5) {
@@ -483,6 +495,7 @@ pub fn operator_ui(
     egui::CentralPanel::default().show(&mut root, |ui| {
         if role.0 == janscope_core::protocol::ClientRole::Broadcast {
             scene_panel(ui, u, &mut scenes, &state, now);
+            replay_panel(ui, &mut replay);
             ui.separator();
         }
         egui::ScrollArea::vertical().show(ui, |ui| match state.phase {
@@ -1429,6 +1442,7 @@ fn scene_panel(
             SceneKind::Waiting,
             SceneKind::FinalResult,
             SceneKind::Standings,
+            SceneKind::Replay,
         ] {
             let label = match k {
                 SceneKind::Fullscreen(_) => "全画面映像".to_string(),
@@ -1589,6 +1603,96 @@ fn tournament_panel(
             }
         });
         if let Some(m) = &u.csv_msg {
+            ui.label(m.clone());
+        }
+    });
+}
+
+/// 牌譜再生の操作（設計書 4.9 操作）。
+fn replay_panel(ui: &mut egui::Ui, r: &mut crate::replay::Replay) {
+    ui.collapsing("牌譜再生（天鳳形式 JSON）", |ui| {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut r.file)
+                    .hint_text("牌譜ファイルのパス")
+                    .desired_width(420.0),
+            );
+            if ui.button("開く").clicked() {
+                let p = r.file.clone();
+                r.open(&p);
+            }
+        });
+        let Some(pf) = r.paifu.clone() else {
+            if let Some(m) = &r.msg {
+                ui.label(m.clone());
+            }
+            return;
+        };
+        ui.label(format!("{}  {}", pf.title, pf.players.join(" / ")));
+        ui.horizontal(|ui| {
+            let cur = pf.hands.get(r.hand).map(|h| h.label()).unwrap_or_default();
+            let mut sel = r.hand;
+            egui::ComboBox::from_id_salt("replay_hand")
+                .selected_text(cur)
+                .show_ui(ui, |ui| {
+                    for (i, h) in pf.hands.iter().enumerate() {
+                        ui.selectable_value(&mut sel, i, h.label());
+                    }
+                });
+            if sel != r.hand {
+                r.set_hand(sel);
+            }
+            if ui.button("局の先頭").clicked() {
+                r.step = 0;
+            }
+            if ui.button("前の局").clicked() && r.hand > 0 {
+                let h = r.hand - 1;
+                r.set_hand(h);
+            }
+            if ui.button("◀ 1手").clicked() {
+                r.step_by(-1);
+            }
+            let play = if r.playing { "一時停止" } else { "再生" };
+            if ui.button(play).clicked() {
+                r.playing = !r.playing;
+            }
+            if ui.button("1手 ▶").clicked() {
+                r.step_by(1);
+            }
+            if ui.button("次の局").clicked() {
+                let h = r.hand + 1;
+                r.set_hand(h);
+            }
+        });
+        ui.horizontal(|ui| {
+            let n = r.events_len();
+            ui.add(egui::Slider::new(&mut r.step, 0..=n).text("手順"));
+            ui.add(
+                egui::Slider::new(&mut r.speed, 0.5..=4.0)
+                    .text("速度")
+                    .suffix("倍"),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("視点（下に表示）");
+            for s in SeatId::ALL {
+                ui.radio_value(&mut r.viewpoint, s, pf.players[s.index()].clone());
+            }
+            ui.checkbox(&mut r.open_all, "全員の手牌を表示");
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("名場面に登録").clicked() {
+                r.add_bookmark();
+            }
+            let bms = r.bookmarks.clone();
+            for b in &bms {
+                if ui.small_button(&b.label).on_hover_text(&b.file).clicked() {
+                    r.jump(b);
+                }
+            }
+        });
+        ui.weak("放送中が「牌譜再生」のとき: ←→ で1手、Space で再生／停止");
+        if let Some(m) = &r.msg {
             ui.label(m.clone());
         }
     });

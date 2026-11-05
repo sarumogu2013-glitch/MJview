@@ -124,7 +124,17 @@ pub fn install(
     mut program: ResMut<crate::program::Program>,
     mut scenes: ResMut<crate::scenes::Scenes>,
     settings: Option<ResMut<crate::settings::SettingsUi>>,
+    mut replay: ResMut<crate::replay::Replay>,
 ) {
+    // JANSCOPE_PAIFU=<天鳳形式の JSON>、JANSCOPE_PAIFU_STEP=<手順> で牌譜を読み込む（確認用）
+    if let Ok(p) = std::env::var("JANSCOPE_PAIFU") {
+        replay.open(&p);
+        replay.step = std::env::var("JANSCOPE_PAIFU_STEP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+            .min(replay.events_len());
+    }
     // JANSCOPE_SETTINGS=rules で設定ウィンドウのルールタブを開く（確認用）
     if let (Some(mut st), Ok("rules")) = (settings, std::env::var("JANSCOPE_SETTINGS").as_deref()) {
         st.open_rules(janscope_core::rules::GameConfig::preset_standard());
@@ -136,6 +146,7 @@ pub fn install(
         Ok("waiting") => SceneKind::Waiting,
         Ok("final") => SceneKind::FinalResult,
         Ok("standings") => SceneKind::Standings,
+        Ok("replay") => SceneKind::Replay,
         Ok("fullscreen") => SceneKind::Fullscreen(janscope_core::tile::SeatId(3)),
         _ => SceneKind::Game,
     };
