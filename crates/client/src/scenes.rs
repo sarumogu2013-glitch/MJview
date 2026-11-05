@@ -363,3 +363,68 @@ pub fn draw_telop(p: &mut Kids, k: &Kit, text: &str, game: bool) {
         )
     });
 }
+
+/// 通算順位（設計書 4.3）。上位16人まで。
+pub fn draw_standings(p: &mut Kids, k: &Kit, t: &janscope_core::tournament::Tournament) {
+    let th = k.theme;
+    let title = if t.name.trim().is_empty() {
+        "通算順位".to_string()
+    } else {
+        format!("{}  通算順位", t.name)
+    };
+    p.spawn(center(abs(0.0, 20.0, 1920.0, 100.0)))
+        .with_children(|c| k.text(c, title, 60.0, th.text, true));
+    let st = t.standings();
+    if st.is_empty() {
+        p.spawn(center(abs(0.0, 400.0, 1920.0, 100.0)))
+            .with_children(|c| k.text(c, "まだ終わった半荘がありません", 48.0, th.text_dim, false));
+        return;
+    }
+    let head = ["順位", "選手", "所属", "半荘", "ポイント", "平均順位"];
+    let widths = [140.0, 520.0, 380.0, 160.0, 280.0, 200.0];
+    let row_at = |p: &mut Kids, y: f32, cells: Vec<(String, Color, bool)>, bg: Color| {
+        p.spawn((row(abs(120.0, y, 1680.0, 54.0), 0.0), BackgroundColor(bg)))
+            .with_children(|r| {
+                for ((txt, col, bold), w) in cells.into_iter().zip(widths) {
+                    r.spawn(Node {
+                        width: Val::Px(w),
+                        padding: UiRect::left(Val::Px(16.0)),
+                        ..default()
+                    })
+                    .with_children(|c| k.text(c, txt, 32.0, col, bold));
+                }
+            });
+    };
+    row_at(
+        p,
+        140.0,
+        head.iter()
+            .map(|h| (h.to_string(), th.text_dim, false))
+            .collect(),
+        th.panel_alt,
+    );
+    for (i, s) in st.iter().take(16).enumerate() {
+        let col = if s.points >= 0.0 { th.plus } else { th.minus };
+        row_at(
+            p,
+            200.0 + i as f32 * 54.0,
+            vec![
+                (
+                    format!("{}位", s.rank),
+                    if s.rank == 1 { th.riichi } else { th.text },
+                    true,
+                ),
+                (s.name.clone(), th.text, true),
+                (
+                    s.affiliation.clone().unwrap_or_default(),
+                    th.text_dim,
+                    false,
+                ),
+                (s.games.to_string(), th.text, false),
+                (format!("{:+.1}", s.points), col, true),
+                (format!("{:.2}", s.average_rank), th.text, false),
+            ],
+            if i % 2 == 0 { th.panel } else { th.bg },
+        );
+    }
+}

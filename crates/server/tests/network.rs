@@ -292,3 +292,64 @@ fn pinfu() -> WinInput {
         pao: None,
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tournament_records_finished_games() {
+    let dir = tmp_dir("tour");
+    let srv = start(cfg(&dir, 0, None)).await.unwrap();
+    let addr = srv.addr;
+    let dir2 = dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut c = client(addr, ClientRole::Broadcast, CODE);
+        wait_for(&c, |e| matches!(e, NetEvent::State { snapshot: true, .. }));
+        for a in [
+            start_game(),
+            Action::ManualAdjust {
+                deltas: [5000, 0, 0, -5000],
+                reason: "t".into(),
+            },
+            Action::EndGame,
+        ] {
+            let id = c.send_action(a);
+            assert_eq!(wait_result(&c, id), None);
+        }
+        let e = wait_for(&c, |e| matches!(e, NetEvent::State { seq: 3, .. }));
+        let NetEvent::State { view, .. } = e else {
+            unreachable!()
+        };
+        let TableStateView::Full(f) = *view else {
+            panic!()
+        };
+        assert_eq!(f.tournament.games.len(), 1, "終局した半荘が記録される");
+        assert_eq!(f.tournament.standings()[0].name, "選手A");
+        assert!(dir2.join("tournament.json").exists());
+        // 終局を取り消すと記録も消える
+        let id = c.undo();
+        assert_eq!(wait_result(&c, id), None);
+        let e = wait_for(&c, |e| matches!(e, NetEvent::State { seq: 4, .. }));
+        let NetEvent::State { view, .. } = e else {
+            unreachable!()
+        };
+        let TableStateView::Full(f) = *view else {
+            panic!()
+        };
+        assert!(f.tournament.games.is_empty());
+        // やり直すと戻る。名前の変更
+        let id = c.redo();
+        assert_eq!(wait_result(&c, id), None);
+        let id = c.tournament(janscope_core::protocol::TournamentOp::Rename {
+            name: "春季大会".into(),
+        });
+        assert_eq!(wait_result(&c, id), None);
+    })
+    .await
+    .unwrap();
+    srv.stop();
+    // 再起動しても大会通算は残る
+    let saved: janscope_core::tournament::Tournament =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("tournament.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved.name, "春季大会");
+    assert_eq!(saved.games.len(), 1);
+    std::fs::remove_dir_all(dir).ok();
+}

@@ -12,6 +12,7 @@ pub mod scene;
 pub mod scoring;
 pub mod state;
 pub mod tile;
+pub mod tournament;
 pub mod view;
 
 pub use engine::{EngineError, Overlay, apply, preview_win};

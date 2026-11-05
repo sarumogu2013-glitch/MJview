@@ -24,6 +24,9 @@ impl Net {
     pub fn act(&self, a: Action) -> u64 {
         self.0.lock().unwrap().send_action(a)
     }
+    pub fn tournament(&self, op: janscope_core::protocol::TournamentOp) -> u64 {
+        self.0.lock().unwrap().tournament(op)
+    }
     pub fn undo(&self) -> u64 {
         self.0.lock().unwrap().undo()
     }

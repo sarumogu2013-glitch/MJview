@@ -17,6 +17,8 @@ pub enum SceneKind {
     Waiting,
     /// 半荘結果
     FinalResult,
+    /// 大会の通算順位
+    Standings,
 }
 
 impl SceneKind {
@@ -27,6 +29,7 @@ impl SceneKind {
             SceneKind::PlayerIntro => "選手紹介".into(),
             SceneKind::Waiting => "待機・休憩".into(),
             SceneKind::FinalResult => "半荘結果".into(),
+            SceneKind::Standings => "通算順位".into(),
         }
     }
 }

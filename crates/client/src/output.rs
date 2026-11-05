@@ -190,6 +190,11 @@ pub fn rebuild_output(
                         crate::scenes::draw_waiting(p, &kit, &scenes.waiting_text)
                     }
                     SceneKind::FinalResult => crate::scenes::draw_final(p, &kit, s, &face),
+                    SceneKind::Standings => crate::scenes::draw_standings(
+                        p,
+                        &kit,
+                        &table.full.as_ref().unwrap().tournament,
+                    ),
                     SceneKind::Game => {}
                 }
                 if let Some(t) = &scenes.telop {

@@ -65,6 +65,8 @@ struct Update {
 struct Shared {
     log: GameLog,
     seq: u64,
+    tournament: janscope_core::tournament::Tournament,
+    tournament_path: PathBuf,
 }
 
 pub struct Server {
@@ -90,11 +92,54 @@ impl Running {
     }
 }
 
-fn full_view(log: &GameLog) -> FullView {
+fn full_view(sh: &Shared) -> FullView {
     FullView {
-        state: log.state().clone(),
-        can_undo: log.can_undo(),
-        can_redo: log.can_redo(),
+        state: sh.log.state().clone(),
+        can_undo: sh.log.can_undo(),
+        can_redo: sh.log.can_redo(),
+        tournament: sh.tournament.clone(),
+    }
+}
+
+impl Shared {
+    /// 今の半荘のかぎ（操作ログのファイル名＋何回目の半荘開始か）
+    fn game_key(&self) -> String {
+        let file = self
+            .log
+            .path()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let n = self
+            .log
+            .actions()
+            .iter()
+            .filter(|a| matches!(a.action, janscope_core::state::Action::StartGame { .. }))
+            .count();
+        format!("{file}#{n}")
+    }
+
+    /// 終局していれば大会通算に記録する（終局を取り消したら記録も消す）。
+    fn sync_tournament(&mut self) {
+        let key = self.game_key();
+        let state = self.log.state().clone();
+        if self.tournament.sync_game(&key, &state, now_ms()) {
+            self.save_tournament();
+        }
+    }
+
+    fn save_tournament(&self) {
+        if let Some(dir) = self.tournament_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_string_pretty(&self.tournament) {
+            Ok(s) => {
+                if let Err(e) = std::fs::write(&self.tournament_path, s) {
+                    warn!("大会通算を保存できません: {e}");
+                }
+            }
+            Err(e) => warn!("大会通算を保存できません: {e}"),
+        }
     }
 }
 
@@ -122,7 +167,21 @@ pub async fn start(cfg: ServerConfig) -> std::io::Result<Running> {
     let (tx, _) = broadcast::channel(256);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let server = Arc::new(Server {
-        shared: Arc::new(Mutex::new(Shared { log, seq: 0 })),
+        shared: Arc::new(Mutex::new({
+            let tournament_path = cfg.data_dir.join("tournament.json");
+            let tournament = std::fs::read_to_string(&tournament_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let mut sh = Shared {
+                log,
+                seq: 0,
+                tournament,
+                tournament_path,
+            };
+            sh.sync_tournament();
+            sh
+        })),
         tx,
         code: cfg.code.clone(),
         shutdown: shutdown_rx,
@@ -288,7 +347,7 @@ impl Server {
     async fn send_snapshot(&self, ws: &mut Ws, role: ClientRole) -> anyhow_like::Result<()> {
         let (seq, full) = {
             let sh = self.shared.lock().await;
-            (sh.seq, full_view(&sh.log))
+            (sh.seq, full_view(&sh))
         };
         send(
             ws,
@@ -369,6 +428,21 @@ impl Server {
                 )
                 .await?;
             }
+            ClientMsg::Tournament { request_id, op } => {
+                let r = if !role.can_operate() {
+                    Err("このロールでは操作できません".to_string())
+                } else {
+                    self.tournament_op(role, op).await
+                };
+                send(
+                    ws,
+                    &ServerMsg::ActionResult {
+                        request_id,
+                        error: r.err(),
+                    },
+                )
+                .await?;
+            }
             ClientMsg::Redo { request_id } => {
                 let r = self.mutate(role, |log, at| log.redo(at)).await;
                 send(
@@ -384,6 +458,35 @@ impl Server {
         Ok(())
     }
 
+    async fn tournament_op(
+        &self,
+        role: ClientRole,
+        op: janscope_core::protocol::TournamentOp,
+    ) -> Result<(), String> {
+        use janscope_core::protocol::TournamentOp;
+        let at = now_ms();
+        let mut sh = self.shared.lock().await;
+        match op {
+            TournamentOp::Rename { name } => sh.tournament.name = name,
+            TournamentOp::RemoveGame { key } => {
+                if !sh.tournament.remove(&key) {
+                    return Err("その半荘の記録はありません".into());
+                }
+            }
+        }
+        sh.save_tournament();
+        sh.seq += 1;
+        let upd = Update {
+            seq: sh.seq,
+            at,
+            full: Arc::new(full_view(&sh)),
+            overlays: vec![],
+            by: Some(role),
+        };
+        let _ = self.tx.send(upd);
+        Ok(())
+    }
+
     /// ログを変更し、成功したら全クライアントに通知する。
     async fn mutate(
         &self,
@@ -393,11 +496,12 @@ impl Server {
         let at = now_ms();
         let mut sh = self.shared.lock().await;
         let overlays = f(&mut sh.log, at).map_err(|e| e.to_string())?;
+        sh.sync_tournament();
         sh.seq += 1;
         let upd = Update {
             seq: sh.seq,
             at,
-            full: Arc::new(full_view(&sh.log)),
+            full: Arc::new(full_view(&sh)),
             overlays,
             by: Some(role),
         };

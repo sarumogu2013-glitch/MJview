@@ -64,6 +64,23 @@ pub enum ClientMsg {
     },
     /// 連番の抜けに気づいたとき、状態の全体を取り直す
     RequestSnapshot,
+    /// 大会通算の操作
+    Tournament {
+        request_id: u64,
+        op: TournamentOp,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TournamentOp {
+    Rename {
+        name: String,
+    },
+    /// 半荘の記録を消す（練習の半荘など）
+    RemoveGame {
+        key: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

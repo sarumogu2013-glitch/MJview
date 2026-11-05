@@ -15,6 +15,9 @@ pub struct FullView {
     pub state: TableState,
     pub can_undo: bool,
     pub can_redo: bool,
+    /// 大会通算（配信・入力担当ロールだけに送る）
+    #[serde(default)]
+    pub tournament: crate::tournament::Tournament,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

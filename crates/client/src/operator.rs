@@ -81,6 +81,10 @@ pub struct OperatorUi {
     cfg_confirm_delay: bool,
     telop_edit: String,
     fullscreen_seat: u8,
+    tour_name: Option<String>,
+    csv_dir: String,
+    csv_msg: Option<String>,
+    remove_key: Option<String>,
 }
 
 impl Default for OperatorUi {
@@ -118,6 +122,10 @@ impl Default for OperatorUi {
             cfg_confirm_delay: false,
             telop_edit: String::new(),
             fullscreen_seat: 0,
+            tour_name: None,
+            csv_dir: ".".into(),
+            csv_msg: None,
+            remove_key: None,
         }
     }
 }
@@ -417,6 +425,10 @@ pub fn operator_ui(
             face_settings_panel(ui, u, &mut cfg, &mut face);
             if !win_show.records.is_empty() && ui.button("アガリ演出を閉じる").clicked() {
                 win_show.records.clear();
+            }
+            ui.separator();
+            if let Some(t) = table.full.as_ref().map(|f| f.tournament.clone()) {
+                tournament_panel(ui, u, &net, &t);
             }
             ui.separator();
             ui.collapsing("局の履歴", |ui| {
@@ -1388,6 +1400,7 @@ fn scene_panel(
             SceneKind::PlayerIntro,
             SceneKind::Waiting,
             SceneKind::FinalResult,
+            SceneKind::Standings,
         ] {
             let label = match k {
                 SceneKind::Fullscreen(_) => "全画面映像".to_string(),
@@ -1457,5 +1470,98 @@ fn scene_panel(
         ui.separator();
         ui.label("待機画面の文字");
         ui.add(egui::TextEdit::singleline(&mut sc.waiting_text).desired_width(240.0));
+    });
+}
+
+/// 大会通算（設計書 5.6）: 通算順位、半荘の記録の削除、CSV の書き出し。
+fn tournament_panel(
+    ui: &mut egui::Ui,
+    u: &mut OperatorUi,
+    net: &Net,
+    t: &janscope_core::tournament::Tournament,
+) {
+    use janscope_core::protocol::TournamentOp;
+    ui.collapsing(format!("大会通算（{}半荘）", t.games.len()), |ui| {
+        ui.horizontal(|ui| {
+            ui.label("大会名");
+            let name = u.tour_name.get_or_insert_with(|| t.name.clone());
+            ui.text_edit_singleline(name);
+            if ui.button("変更").clicked() {
+                net.tournament(TournamentOp::Rename {
+                    name: name.trim().to_string(),
+                });
+                u.tour_name = None;
+            }
+        });
+        egui::Grid::new("standings").striped(true).show(ui, |ui| {
+            for h in [
+                "順位",
+                "選手",
+                "半荘",
+                "ポイント",
+                "1着",
+                "2着",
+                "3着",
+                "4着",
+                "平均",
+            ] {
+                ui.label(h);
+            }
+            ui.end_row();
+            for s in t.standings() {
+                ui.label(s.rank.to_string());
+                ui.label(&s.name);
+                ui.label(s.games.to_string());
+                ui.label(format!("{:+.1}", s.points));
+                for n in s.placements {
+                    ui.label(n.to_string());
+                }
+                ui.label(format!("{:.2}", s.average_rank));
+                ui.end_row();
+            }
+        });
+        ui.collapsing("半荘の記録", |ui| {
+            for (i, g) in t.games.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let top = g
+                        .results
+                        .first()
+                        .map(|r| g.players[r.seat.index()].name.clone())
+                        .unwrap_or_default();
+                    ui.label(format!("{}. トップ {top}", i + 1));
+                    if u.remove_key.as_deref() == Some(g.key.as_str()) {
+                        if ui.button("本当に消す").clicked() {
+                            net.tournament(TournamentOp::RemoveGame { key: g.key.clone() });
+                            u.remove_key = None;
+                        }
+                        if ui.button("やめる").clicked() {
+                            u.remove_key = None;
+                        }
+                    } else if ui.small_button("記録から消す").clicked() {
+                        u.remove_key = Some(g.key.clone());
+                    }
+                });
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("CSV の保存先フォルダ");
+            ui.text_edit_singleline(&mut u.csv_dir);
+            if ui.button("CSV を書き出す").clicked() {
+                let dir = std::path::PathBuf::from(u.csv_dir.trim());
+                let a = dir.join("通算順位.csv");
+                let b = dir.join("半荘結果.csv");
+                u.csv_msg = Some(
+                    match std::fs::write(&a, t.standings_csv())
+                        .and_then(|_| std::fs::write(&b, t.games_csv()))
+                    {
+                        Ok(()) => format!("保存しました: {} / {}", a.display(), b.display()),
+                        Err(e) => format!("保存できません: {e}"),
+                    },
+                );
+            }
+        });
+        if let Some(m) = &u.csv_msg {
+            ui.label(m.clone());
+        }
     });
 }

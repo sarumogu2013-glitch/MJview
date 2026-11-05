@@ -130,6 +130,7 @@ pub fn install(
         Ok("intro") => SceneKind::PlayerIntro,
         Ok("waiting") => SceneKind::Waiting,
         Ok("final") => SceneKind::FinalResult,
+        Ok("standings") => SceneKind::Standings,
         Ok("fullscreen") => SceneKind::Fullscreen(janscope_core::tile::SeatId(3)),
         _ => SceneKind::Game,
     };
@@ -144,6 +145,7 @@ pub fn install(
         state: s,
         can_undo: true,
         can_redo: false,
+        tournament: demo_tournament(&kind),
     });
     program.full = table.full.clone();
     program.seq = 1;
@@ -198,4 +200,44 @@ pub fn take_screenshot(
         error!("画面を保存できませんでした");
         exit.write(AppExit::error());
     }
+}
+
+/// 見本の大会通算（result の見本では、終局した半荘と架空の2半荘を入れる）。
+fn demo_tournament(kind: &str) -> janscope_core::tournament::Tournament {
+    let mut t = janscope_core::tournament::Tournament {
+        name: "見本大会".into(),
+        games: vec![],
+    };
+    if kind != "result" {
+        return t;
+    }
+    let (s, _) = demo_state("result");
+    t.sync_game("demo#1", &s, 1);
+    for (k, d) in [
+        ("demo#2", [12_000, -3_000, 1_000, -10_000]),
+        ("demo#3", [-8_000, 20_000, -4_000, -8_000]),
+    ] {
+        let mut g = TableState::default();
+        let players = std::array::from_fn(|i| s.seats[i].player.clone());
+        apply(
+            &mut g,
+            &Action::StartGame {
+                config: GameConfig::preset_standard(),
+                players,
+                chiicha: SeatId(0),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut g,
+            &Action::ManualAdjust {
+                deltas: d,
+                reason: "見本".into(),
+            },
+        )
+        .unwrap();
+        apply(&mut g, &Action::EndGame).unwrap();
+        t.sync_game(k, &g, 2);
+    }
+    t
 }

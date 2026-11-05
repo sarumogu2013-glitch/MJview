@@ -134,6 +134,12 @@ impl NetClient {
         let _ = self.out.send(ClientMsg::Redo { request_id });
         request_id
     }
+    pub fn tournament(&mut self, op: janscope_core::protocol::TournamentOp) -> u64 {
+        let request_id = self.id();
+        let _ = self.out.send(ClientMsg::Tournament { request_id, op });
+        request_id
+    }
+
     pub fn preview(&mut self, input: janscope_core::scoring::WinInput) -> u64 {
         let request_id = self.id();
         let _ = self
