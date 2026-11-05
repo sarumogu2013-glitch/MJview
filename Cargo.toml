@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/server", "crates/netclient", "crates/video", "crates/client"]
+members = ["crates/core", "crates/server", "crates/netclient", "crates/video", "crates/update", "crates/client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ rust-version = "1.85"
 janscope-core = { path = "crates/core" }
 janscope-netclient = { path = "crates/netclient" }
 janscope-video = { path = "crates/video" }
+janscope-update = { path = "crates/update" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

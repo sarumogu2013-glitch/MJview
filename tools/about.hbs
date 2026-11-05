@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JanScope 依存ライセンス</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1b1b; --muted:#5a5a5a; --line:#ddd; --code:#f5f5f5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17181a; --fg:#e8e8e8; --muted:#a0a0a0; --line:#333; --code:#202124; } }
+  body { background:var(--bg); color:var(--fg); font-family:system-ui, "Yu Gothic UI", "Meiryo", sans-serif; margin:0 auto; max-width:960px; padding:24px 16px; line-height:1.6; }
+  h1 { font-size:1.5rem; } h2 { font-size:1.15rem; margin-top:2.2rem; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  ul.used { columns:2; color:var(--muted); font-size:.9rem; }
+  pre { background:var(--code); padding:12px; overflow-x:auto; white-space:pre-wrap; font-size:.8rem; }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>JanScope が使っている Rust のライブラリのライセンス</h1>
+<p class="muted">cargo-about で自動生成。JanScope 本体は MIT OR Apache-2.0。素材（牌画像・フォント）と FFmpeg については THIRD_PARTY_LICENSES.md を見てください。</p>
+<h2>ライセンスの一覧</h2>
+<ul>
+{{#each overview}}<li><a href="#{{id}}">{{name}}</a>（{{count}}）</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>使っているもの:</p>
+<ul class="used">
+{{#each used_by}}<li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

@@ -24,6 +24,7 @@ mod settings;
 mod settings_prefs;
 mod theme;
 mod ui_kit;
+mod update;
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
@@ -200,6 +201,7 @@ fn main() {
             );
         app.insert_resource(settings::Library::load())
             .init_resource::<settings::SettingsUi>()
+            .add_systems(Startup, update::startup_check)
             .add_systems(
                 EguiPrimaryContextPass,
                 (operator::operator_ui, settings::settings_ui).chain(),

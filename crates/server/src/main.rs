@@ -1,12 +1,76 @@
 //! janscope-server: 処理サーバー（ノートPCで起動）。
 //!
 //!     janscope-server [--port 47800] [--data ./data] [--code 123456] [--resume <file> | --resume-latest]
+//!     janscope-server --check-update | --update
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use janscope_core::protocol::DEFAULT_PORT;
 use janscope_server::{ServerConfig, VERSION, latest_log, new_code, start};
+
+const REPO_URL: &str = env!("CARGO_PKG_REPOSITORY");
+
+/// 新しい版があるか確かめて表示する
+fn print_update_check() -> bool {
+    match janscope_update::Updater::github().check(VERSION) {
+        Ok(janscope_update::Check::Available(r)) => {
+            println!(" 新しい版 {} があります（今は {VERSION}）。", r.version);
+            println!("   入れ替え: サーバーを止めてから janscope-server --update");
+            println!("   変更点 : {}", r.page_url);
+            true
+        }
+        Ok(janscope_update::Check::UpToDate { .. }) => {
+            println!(" 最新の版です（{VERSION}）");
+            false
+        }
+        Err(e) => {
+            println!(" 新しい版を確かめられませんでした: {e}");
+            false
+        }
+    }
+}
+
+/// 新しい版を取ってきて入れ替える
+fn run_update() -> i32 {
+    let Some(dir) = janscope_update::install_dir() else {
+        eprintln!("実行ファイルの場所が分かりません");
+        return 1;
+    };
+    let up = janscope_update::Updater::github();
+    let rel = match up.check(VERSION) {
+        Ok(janscope_update::Check::Available(r)) => r,
+        Ok(janscope_update::Check::UpToDate { latest }) => {
+            println!("最新の版です（手元 {VERSION}、公開 {latest}）");
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("新しい版を確かめられません: {e}");
+            return 1;
+        }
+    };
+    println!("{} を取ってきます…", rel.version);
+    let mut last = 0;
+    match janscope_update::download_and_apply(&up, &rel, &dir, |done, all| {
+        let pct = done * 100 / all.max(1);
+        if pct >= last + 10 {
+            last = pct;
+            println!("  {pct}%");
+        }
+    }) {
+        Ok(a) => {
+            println!(
+                "{} に入れ替えました（置き換え {} 件、追加 {} 件）。起動し直してください",
+                rel.version, a.replaced, a.added
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("入れ替えられませんでした（元のままです）: {e}");
+            1
+        }
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -15,7 +79,11 @@ fn usage() -> ! {
          \x20 --data <フォルダ>   操作ログの保存先（既定 ./data）\n\
          \x20 --code <6桁>       接続コード（既定: 起動ごとに乱数）\n\
          \x20 --resume <ファイル> 指定したログから続きを再開\n\
-         \x20 --resume-latest    いちばん新しいログから続きを再開"
+         \x20 --resume-latest    いちばん新しいログから続きを再開\n\
+         \x20 --no-update-check  起動時に新しい版を確かめない\n\
+         \x20 --check-update     新しい版があるか確かめて終わる\n\
+         \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\n\
+         ソース: {REPO_URL}（MIT OR Apache-2.0。同梱物のライセンスは THIRD_PARTY_LICENSES.md）"
     );
     std::process::exit(2)
 }
@@ -32,6 +100,7 @@ async fn main() {
     let mut code = None;
     let mut resume = None;
     let mut resume_latest = false;
+    let mut update_check = true;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -45,8 +114,17 @@ async fn main() {
             "--code" => code = Some(args.next().unwrap_or_else(|| usage())),
             "--resume" => resume = Some(args.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--resume-latest" => resume_latest = true,
+            "--no-update-check" => update_check = false,
+            "--check-update" => {
+                print_update_check();
+                return;
+            }
+            "--update" => std::process::exit(run_update()),
             _ => usage(),
         }
+    }
+    if let Some(dir) = janscope_update::install_dir() {
+        janscope_update::cleanup_old(&dir);
     }
     if resume_latest {
         resume = latest_log(&data);
@@ -78,6 +156,10 @@ async fn main() {
         println!(" 操作ログ    : {}", p.display());
     }
     println!("==============================================");
+    // 起動時に確かめるだけ（入れ替えは --update で人が行う）
+    if update_check && janscope_update::is_dist_install() {
+        tokio::task::spawn_blocking(print_update_check);
+    }
     tokio::signal::ctrl_c().await.ok();
     println!("終了します");
 }

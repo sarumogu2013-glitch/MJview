@@ -257,6 +257,23 @@ pub struct Prefs {
     pub shortcuts: Shortcuts,
     pub player_screen: PlayerScreenPrefs,
     pub replay: ReplayPrefs,
+    pub update: UpdatePrefs,
+}
+
+/// 更新（設定ウィンドウの「更新」タブ）
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdatePrefs {
+    /// 起動時に新しい版を確かめる（確かめるだけ）
+    pub check_on_start: bool,
+}
+
+impl Default for UpdatePrefs {
+    fn default() -> Self {
+        Self {
+            check_on_start: true,
+        }
+    }
 }
 
 /// 割り当てられるキー（名前 ↔ KeyCode）。

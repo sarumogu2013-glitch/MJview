@@ -33,6 +33,13 @@ JanScope 本体は MIT OR Apache-2.0（[LICENSE-MIT](LICENSE-MIT) / [LICENSE-APA
 | resvg 0.49 | Apache-2.0 OR MIT | 牌画像（SVG）のラスタライズ |
 | tokio / tokio-tungstenite / futures-util | MIT | 通信 |
 | serde / serde_json / thiserror / rand / tracing | MIT OR Apache-2.0 | 共通 |
+| ureq / rustls / rustls-platform-verifier | MIT OR Apache-2.0（rustls は Apache-2.0 OR ISC OR MIT） | 自動アップデートの通信（HTTPS） |
+| ring | Apache-2.0 AND ISC | 暗号（rustls が使う） |
+| webpki-roots | CDLA-Permissive-2.0 | 証明書の一覧（rustls が使う） |
+| zip / flate2 / zlib-rs | MIT / MIT OR Apache-2.0 / Zlib | 更新ファイルの展開 |
+| semver / sha2 | MIT OR Apache-2.0 | 版の比較、ダウンロードの確認 |
+
+配布 zip には、Rust の依存すべてのライセンス文を `licenses/rust-dependencies.html` として入れる（`cargo about generate tools/about.hbs` で作る。認めるライセンスは `about.toml` の `accepted`）。
 
 依存を追加するたびに、寛容なライセンス（MIT / Apache-2.0 / BSD / Zlib / ISC / Unicode / CC0 / OFL など）かを確認する。GPL・LGPL・AGPL のものは本体に入れない（`cargo tree` で一覧できる）。
 

@@ -16,3 +16,4 @@ training/datasets/
 # Rust（段階B以降）
 target/
 Cargo.lock.bak
+/dist

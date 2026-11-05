@@ -1,0 +1,36 @@
+# push と PR のたびに、テストと Windows でのビルドを確かめる。
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - name: ffmpeg（RTMP のテスト用）
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - uses: Swatinem/rust-cache@v2
+      - name: テスト
+        run: cargo test --workspace
+      - name: 依存のライセンス（寛容なものだけか）
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate tools/about.hbs -o target/licenses.html
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: テスト
+        run: cargo test --workspace

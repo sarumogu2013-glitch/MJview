@@ -336,6 +336,20 @@ pub fn operator_ui(
                     janscope_core::VERSION,
                     table.rtt_ms / 2
                 ));
+                if let Some(v) = settings.update.available() {
+                    if ui
+                        .small_button(
+                            egui::RichText::new(format!("新しい版 {v} あり"))
+                                .color(egui::Color32::from_rgb(255, 210, 90)),
+                        )
+                        .on_hover_text(
+                            "設定 →「更新」で入れ替えられます（配信中は入れ替えないこと）",
+                        )
+                        .clicked()
+                    {
+                        settings.open_tab("更新");
+                    }
+                }
             });
         });
         if let Some(e) = table.last_error.clone() {

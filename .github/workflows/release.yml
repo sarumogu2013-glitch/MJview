@@ -1,0 +1,39 @@
+# タグ（v0.2.0 など）を push すると、Windows 用の zip を作って GitHub Releases に出す（設計書 9章）。
+# タグの版は Cargo.toml の [workspace.package] version と同じにすること（違うと止まる）。
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: テスト
+        run: cargo test --workspace --release
+      - name: ビルド
+        run: cargo build --release -p janscope-server -p janscope-client
+      - name: 依存のライセンス一覧
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate tools/about.hbs -o target/licenses.html
+      - name: zip を作る
+        run: python tools/package.py --bin-dir target/release --suffix windows-x64 --rust-licenses target/licenses.html --tag "${{ github.ref_name }}"
+      - name: Releases に出す
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          [ -n "$notes" ] || notes="JanScope $GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 \
+            --title "JanScope $GITHUB_REF_NAME" --notes "$notes" --verify-tag

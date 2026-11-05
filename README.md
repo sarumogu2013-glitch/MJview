@@ -30,7 +30,7 @@
 | B6 | 顔カメラの RTMP 取り込み、選手画面の自動・手動切替、黒枠＋obs-websocket 連携 | 済み（RTMP の受信と OBS 連携のテストあり。ソースごとの同期補正は B7 で） |
 | B7 | 配信ディレイ（データと映像）、シーン切替とトランジション、テロップ、点数移動・アガリ演出・半荘結果・選手紹介 | 済み（OBS での見え方は実機で確認が必要） |
 | B8 | 大会通算・CSV・通算順位、設定ウィンドウ（ルール・選手・選手用画面・レイアウト・テーマ・演出・ショートカット・牌譜再生・データ）、牌譜再生（天鳳形式 JSON） | 済み（部品の位置をドラッグで変える機能はまだ。「更新」タブは B9、「自動読み取り」タブは段階C） |
-| B9 | 自動アップデート・リリース | 未着手 |
+| B9 | 自動アップデート（GitHub Releases）、リリースの自動化（タグで Windows zip）、ライセンス表記（「情報」タブ・依存ライセンス一覧） | 済み（Windows の実機での入れ替えは確認が必要。最初のリリースはまだ出していない） |
 | C | カメラ導入と自動読み取り | 段階Aの後 |
 
 ## ディレクトリ
@@ -43,8 +43,10 @@
 | `crates/server/` | 処理サーバー `janscope-server`（ノートPC） |
 | `crates/netclient/` | クライアント側の接続（自動再接続・時刻合わせ） |
 | `crates/client/` | 配信クライアント `janscope-client`（出力・操作・選手用画面） |
+| `crates/update/` | 自動アップデート（GitHub Releases の確認・取得・入れ替え） |
 | `assets/fonts/` | Noto Sans JP（OFL） |
-| `tools/` | 開発用スクリプト（点数計算の突き合わせケース生成） |
+| `tools/` | 開発用スクリプト（点数計算の突き合わせケース生成、配布 zip の作成） |
+| `.github/workflows/` | CI（テスト・Windows ビルド）とリリース |
 | `training/` | 牌認識の学習・評価ツール（Python。配布物には含めない）。使い方は [training/README.md](training/README.md) |
 
 ## 動かし方（開発中）
@@ -69,6 +71,16 @@ cargo run -p janscope-client -- --demo
 
 テスト: `cargo test --workspace`（RTMP のテストは ffmpeg がある環境でだけ動きます）
 
+## 更新とリリース
+
+- アプリは起動時に新しい版があるかだけ確かめます（配布フォルダから動いているとき）。入れ替えはクライアントの「設定 → 更新」か `janscope-server --update` で、人が行います。配信中は行わないでください
+- 入れ替えで、設定（`janscope-client.json`）・`data/`・`ffmpeg/` は消えません
+- リリースの出し方:
+  1. `Cargo.toml` の `[workspace.package] version` を上げてコミット
+  2. 同じ版のタグを打って push（例: `git tag -a v0.2.0 -m "変更点…" && git push origin v0.2.0`）。タグのメッセージがリリースの説明になります
+  3. GitHub Actions（`.github/workflows/release.yml`）がテスト → ビルド → `janscope-<版>-windows-x64.zip` と `.sha256` を Releases に出します
+- 配布 zip を手元で作る: `python3 tools/package.py --bin-dir target/release --suffix windows-x64 --rust-licenses <cargo about の HTML>`
+
 ## ライセンス
 
 | 対象 | ライセンス |
@@ -80,5 +92,6 @@ cargo run -p janscope-client -- --demo
 | 同梱の素材・依存 | それぞれのライセンス（[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)）。牌画像 CC0、フォント OFL-1.1、mahc BSD-3-Clause など |
 
 - 再配布・改変・商用利用は、MIT か Apache-2.0 の条件（著作権表示とライセンス文を残すこと）を守れば自由です
-- 配布物に FFmpeg を同梱する場合は、FFmpeg の LGPL の条件に従います（本体は別プログラムとして呼ぶだけで、リンクしません）
+- 配布 zip には、ライセンス文（LICENSE-MIT / LICENSE-APACHE / THIRD_PARTY_LICENSES.md）と、Rust の依存すべてのライセンス文（`licenses/rust-dependencies.html`、`cargo about` で作成。寛容なライセンス以外が入るとリリースが止まる）を入れます。アプリの「設定 → 情報」にもソースの URL とライセンスを表示します
+- 配布 zip には FFmpeg を入れていません（利用者が `ffmpeg/` に LGPL ビルドを置く）。FFmpeg を同梱する場合は、FFmpeg の LGPL の条件に従います（本体は別プログラムとして呼ぶだけで、リンクしません）
 - 設計書 0.19.0 では全体を AGPL-3.0 としていましたが、緩いライセンスにする方針に変えました（本体の依存はすべて MIT/Apache/BSD/CC0/OFL で、AGPL のものは `training/` と検出モデルだけ）

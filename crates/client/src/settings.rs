@@ -134,6 +134,8 @@ pub enum Tab {
     Rules,
     Players,
     Pref(crate::settings_prefs::PrefTab),
+    Update,
+    About,
 }
 
 #[derive(Resource, Default)]
@@ -150,6 +152,7 @@ pub struct SettingsUi {
     players_draft: Option<Vec<Player>>,
     prefs_draft: Option<crate::prefs::Prefs>,
     key_wait: Option<String>,
+    pub update: crate::update::UpdateState,
 }
 
 impl SettingsUi {
@@ -157,6 +160,11 @@ impl SettingsUi {
     /// 指定のタブを開く（確認用）。
     pub fn open_tab(&mut self, name: &str) {
         self.open = true;
+        match name {
+            "更新" | "update" => return self.tab = Tab::Update,
+            "情報" | "about" => return self.tab = Tab::About,
+            _ => {}
+        }
         if let Some(t) = crate::settings_prefs::PrefTab::ALL
             .into_iter()
             .find(|t| t.name() == name)
@@ -198,6 +206,8 @@ pub fn settings_ui(
                 for t in crate::settings_prefs::PrefTab::ALL {
                     ui.selectable_value(&mut st.tab, Tab::Pref(t), t.name());
                 }
+                ui.selectable_value(&mut st.tab, Tab::Update, "更新");
+                ui.selectable_value(&mut st.tab, Tab::About, "情報");
                 ui.weak(
                     "（顔カメラ・OBS・切替・ディレイは左の欄の「顔カメラ・OBS 連携・切替の設定」）",
                 );
@@ -207,6 +217,8 @@ pub fn settings_ui(
                 Tab::Rules => rules_tab(ui, st, &mut lib, &table, &net),
                 Tab::Players => players_tab(ui, st, &mut lib),
                 Tab::Pref(t) => prefs_page(ui, st, t, &mut cfg, &keys),
+                Tab::Update => crate::update::update_tab(ui, &mut st.update, &mut cfg, &mut st.msg),
+                Tab::About => crate::update::about_tab(ui),
             }
             if let Some(m) = &st.msg {
                 ui.separator();

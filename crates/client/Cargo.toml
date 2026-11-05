@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [[bin]]
 name = "janscope-client"
@@ -14,6 +15,7 @@ path = "src/main.rs"
 janscope-core.workspace = true
 janscope-netclient.workspace = true
 janscope-video.workspace = true
+janscope-update.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bevy = { version = "=0.20.1", default-features = false, features = [
