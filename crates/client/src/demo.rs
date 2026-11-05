@@ -123,7 +123,12 @@ pub fn install(
     mut table: ResMut<Table>,
     mut program: ResMut<crate::program::Program>,
     mut scenes: ResMut<crate::scenes::Scenes>,
+    settings: Option<ResMut<crate::settings::SettingsUi>>,
 ) {
+    // JANSCOPE_SETTINGS=rules で設定ウィンドウのルールタブを開く（確認用）
+    if let (Some(mut st), Ok("rules")) = (settings, std::env::var("JANSCOPE_SETTINGS").as_deref()) {
+        st.open_rules(janscope_core::rules::GameConfig::preset_standard());
+    }
     // JANSCOPE_SCENE で最初に放送するシーンを選ぶ（確認用）
     use janscope_core::scene::SceneKind;
     scenes.sw.program = match std::env::var("JANSCOPE_SCENE").as_deref() {

@@ -359,3 +359,27 @@ fn public_view_has_no_hand_tiles() {
     assert!(!json.contains("\"7m\""));
     assert!(json.contains("平和"));
 }
+
+#[test]
+fn set_config_mid_game() {
+    let mut s = start(GameConfig::preset_standard());
+    hand(&mut s);
+    let mut c = GameConfig::preset_standard();
+    c.kuitan = false;
+    apply(&mut s, &Action::SetConfig { config: c.clone() }).unwrap();
+    assert!(!s.config.kuitan);
+    // 点数は変わらない
+    assert_eq!(s.scores(), [25_000; 4]);
+    c.uma = [1, 0, 0, 0];
+    assert!(
+        apply(&mut s, &Action::SetConfig { config: c }).is_err(),
+        "ウマの合計が0でないルールは拒否"
+    );
+    // 終局後にウマを変えると最終ポイントが計算し直される
+    apply(&mut s, &Action::EndGame).unwrap();
+    let before = s.final_results.clone().unwrap();
+    let mut c2 = GameConfig::preset_standard();
+    c2.uma = [30_000, 10_000, -10_000, -30_000];
+    apply(&mut s, &Action::SetConfig { config: c2 }).unwrap();
+    assert_ne!(s.final_results.clone().unwrap(), before);
+}

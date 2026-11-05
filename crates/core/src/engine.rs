@@ -276,6 +276,25 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
             s.seats[seat.index()].player = player.clone();
             Ok(vec![])
         }
+        SetConfig { config } => {
+            need_phase(
+                s,
+                &[Phase::InHand, Phase::BetweenHands, Phase::GameOver],
+                "ルールの変更",
+            )?;
+            let errs = config.validate();
+            if !errs.is_empty() {
+                return invalid(format!(
+                    "ルールの設定に誤りがあります: {}",
+                    errs.join(" / ")
+                ));
+            }
+            s.config = config.clone();
+            if s.phase == Phase::GameOver {
+                s.final_results = Some(final_results(s));
+            }
+            Ok(vec![])
+        }
         EndGame => {
             need_phase(s, &[Phase::InHand, Phase::BetweenHands], "終局")?;
             finish(s);

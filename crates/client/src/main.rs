@@ -18,6 +18,7 @@ mod output;
 mod player_screen;
 mod program;
 mod scenes;
+mod settings;
 mod theme;
 mod ui_kit;
 
@@ -190,7 +191,12 @@ fn main() {
                 )
                     .chain(),
             );
-        app.add_systems(EguiPrimaryContextPass, operator::operator_ui);
+        app.insert_resource(settings::Library::load())
+            .init_resource::<settings::SettingsUi>()
+            .add_systems(
+                EguiPrimaryContextPass,
+                (operator::operator_ui, settings::settings_ui).chain(),
+            );
     }
     if let Some(path) = args.screenshot.clone() {
         app.insert_resource(demo::ScreenshotTask {

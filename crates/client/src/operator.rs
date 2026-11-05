@@ -45,6 +45,8 @@ pub struct OperatorUi {
     tex: HashMap<String, egui::TextureId>,
     // 半荘開始
     presets: Vec<GameConfig>,
+    /// 選手の登録（設定の選手タブ）
+    registry: Vec<Player>,
     preset: usize,
     names: [String; 4],
     affiliations: [String; 4],
@@ -93,6 +95,7 @@ impl Default for OperatorUi {
             fonts_set: false,
             tex: HashMap::new(),
             presets: GameConfig::presets(),
+            registry: vec![],
             preset: 0,
             names: ["選手A", "選手B", "選手C", "選手D"].map(String::from),
             affiliations: Default::default(),
@@ -196,6 +199,8 @@ pub fn operator_ui(
     keys: Res<ButtonInput<KeyCode>>,
     role: Res<crate::Role>,
     mut scenes: ResMut<crate::scenes::Scenes>,
+    mut settings: ResMut<crate::settings::SettingsUi>,
+    lib: Res<crate::settings::Library>,
 ) -> Result {
     let Some(tiles) = tiles else { return Ok(()) };
     if ui_state.tex.is_empty() {
@@ -212,6 +217,11 @@ pub fn operator_ui(
         ui_state.fonts_set = true;
     }
     let u = &mut *ui_state;
+    u.presets = lib.all_presets();
+    if u.preset >= u.presets.len() {
+        u.preset = 0;
+    }
+    u.registry = lib.players.clone();
 
     // 専用キー（文字入力中は無効）
     if !ctx.egui_wants_keyboard_input() {
@@ -292,6 +302,9 @@ pub fn operator_ui(
                 .clicked()
             {
                 net.redo();
+            }
+            if ui.button("設定").clicked() {
+                settings.open = !settings.open;
             }
             if cfg.delay_secs > 0.0 {
                 ui.colored_label(
@@ -596,7 +609,7 @@ fn setup_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableSt
             "東風戦"
         }
     ));
-    ui.label("ルールの細かい編集は設定画面（段階B8）で行います");
+    ui.label("ルールの編集・プリセットの保存は上部の「設定」→ ルール");
     egui::Grid::new("players").show(ui, |ui| {
         ui.label("席");
         ui.label("選手名");
@@ -605,7 +618,22 @@ fn setup_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableSt
         ui.end_row();
         for i in 0..4 {
             ui.label(format!("{}", SeatId(i as u8).label()));
-            ui.text_edit_singleline(&mut u.names[i]);
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut u.names[i]);
+                if !u.registry.is_empty() {
+                    let reg = u.registry.clone();
+                    egui::ComboBox::from_id_salt(format!("reg{i}"))
+                        .selected_text("登録から")
+                        .show_ui(ui, |ui| {
+                            for p in &reg {
+                                if ui.selectable_label(false, &p.name).clicked() {
+                                    u.names[i] = p.name.clone();
+                                    u.affiliations[i] = p.affiliation.clone().unwrap_or_default();
+                                }
+                            }
+                        });
+                }
+            });
             ui.text_edit_singleline(&mut u.affiliations[i]);
             ui.radio_value(&mut u.chiicha, i as u8, "");
             ui.end_row();

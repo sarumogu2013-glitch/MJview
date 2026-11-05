@@ -130,6 +130,10 @@ pub enum Action {
     },
     /// 半荘を途中で打ち切って終了（時間切れなど）
     EndGame,
+    /// 対局中にルールを差し替える（設定UIのルールタブ。点数は変えず、以後の計算と進行に使う）
+    SetConfig {
+        config: GameConfig,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
