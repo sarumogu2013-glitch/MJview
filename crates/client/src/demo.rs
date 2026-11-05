@@ -136,8 +136,12 @@ pub fn install(
             .min(replay.events_len());
     }
     // JANSCOPE_SETTINGS=rules で設定ウィンドウのルールタブを開く（確認用）
-    if let (Some(mut st), Ok("rules")) = (settings, std::env::var("JANSCOPE_SETTINGS").as_deref()) {
-        st.open_rules(janscope_core::rules::GameConfig::preset_standard());
+    if let (Some(mut st), Ok(tab)) = (settings, std::env::var("JANSCOPE_SETTINGS")) {
+        if tab == "rules" {
+            st.open_rules(janscope_core::rules::GameConfig::preset_standard());
+        } else {
+            st.open_tab(&tab);
+        }
     }
     // JANSCOPE_SCENE で最初に放送するシーンを選ぶ（確認用）
     use janscope_core::scene::SceneKind;

@@ -53,6 +53,7 @@ pub struct OutputDirty {
 
 /// 演出の出来事を受けて、選手画面・アガリ演出を切り替える。
 pub fn handle_overlays(
+    cfg: Res<crate::config::ClientConfig>,
     mut table: ResMut<Program>,
     mut face: ResMut<FaceRuntime>,
     mut win: ResMut<WinShow>,
@@ -62,15 +63,8 @@ pub fn handle_overlays(
     let overlays: Vec<_> = table.overlays.drain(..).collect();
     crate::face::face_triggers(&table, &mut face, &overlays, now);
     // アガリ演出は選手画面のアガリ表示と同じ秒数で、アガった人ごとに順に出す
-    let per = face
-        .sw
-        .config
-        .triggers
-        .iter()
-        .find(|t| t.kind == janscope_core::face::TriggerKind::Win)
-        .map(|t| t.secs)
-        .unwrap_or(10.0)
-        .max(3.0);
+    // アガリ演出の1人あたりの秒数（設定の演出タブ）
+    let per = cfg.prefs.presentation.win_secs.max(3.0);
     for (_, o) in overlays {
         match o {
             Overlay::Win { .. } => {
@@ -106,6 +100,7 @@ pub fn rebuild_output(
     scenes: Res<crate::scenes::Scenes>,
     mut anim: ResMut<ScoreAnim>,
     replay: Res<crate::replay::Replay>,
+    cfg: Res<crate::config::ClientConfig>,
 ) {
     let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else {
         return;
@@ -125,6 +120,7 @@ pub fn rebuild_output(
             }
         }
     }
+    anim.duration = cfg.prefs.presentation.score_anim_secs;
     let shown = anim.shown(now);
     let step = anim.step(now);
     let face_seat = st.map(|_| face.current);
@@ -149,7 +145,8 @@ pub fn rebuild_output(
                 replay.open_all,
                 replay.file.len(),
                 replay.paifu.is_some()
-            )
+            ),
+            format!("{:?}", cfg.prefs)
         )
     );
     if key == dirty.last_key {
@@ -163,6 +160,7 @@ pub fn rebuild_output(
         fonts: &fonts,
         tiles: &tiles,
         theme: &theme,
+        prefs: &cfg.prefs,
     };
     commands
         .spawn((
@@ -213,15 +211,38 @@ pub fn rebuild_output(
             }
             Some(s) => {
                 let face_seat = face_seat.unwrap();
-                draw_face(p, &kit, s, face_seat, &face);
-                draw_round(p, &kit, s);
-                draw_scores(p, &kit, s, face_seat, shown);
-                draw_dice(p, &kit, s);
-                draw_dora(p, &kit, s);
-                draw_wall(p, &kit, s);
-                for (i, seat) in SeatId::ALL.iter().enumerate() {
-                    let rec = win.current(now).filter(|r| r.input.winner == *seat);
-                    draw_hand_frame(p, &kit, s, *seat, i as f32 * 480.0, face_seat == *seat, rec);
+                let lay = &cfg.prefs.layout;
+                if lay.show_face {
+                    draw_face(p, &kit, s, face_seat, &face);
+                }
+                if lay.show_round {
+                    draw_round(p, &kit, s);
+                }
+                if lay.show_scores {
+                    draw_scores(p, &kit, s, face_seat, shown);
+                }
+                if lay.show_dice {
+                    draw_dice(p, &kit, s);
+                }
+                if lay.show_dora {
+                    draw_dora(p, &kit, s);
+                }
+                if lay.show_wall {
+                    draw_wall(p, &kit, s);
+                }
+                if lay.show_hand_frames {
+                    for (i, seat) in SeatId::ALL.iter().enumerate() {
+                        let rec = win.current(now).filter(|r| r.input.winner == *seat);
+                        draw_hand_frame(
+                            p,
+                            &kit,
+                            s,
+                            *seat,
+                            i as f32 * 480.0,
+                            face_seat == *seat,
+                            rec,
+                        );
+                    }
                 }
                 if let Some(r) = win.current(now) {
                     draw_win(p, &kit, s, r);
@@ -351,6 +372,7 @@ fn riichi_badge(p: &mut Kids, k: &Kit, size: f32) {
 
 fn draw_round(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
+    let pr = &k.prefs.presentation;
     p.spawn((
         row(abs(1066.0, 0.0, 854.0, 100.0), 36.0),
         BackgroundColor(th.panel_alt),
@@ -367,17 +389,16 @@ fn draw_round(p: &mut Kids, k: &Kit, s: &TableState) {
         };
         k.text(q, label, 52.0, th.text, true);
         k.text(q, format!("{}本場", s.honba), 40.0, th.text, false);
-        k.text(
-            q,
+        let kyotaku = if pr.kyotaku_as_points {
             format!(
                 "供託 {}",
                 janscope_core::scoring::fmt_pts(s.kyotaku as i32 * 1000)
-            ),
-            36.0,
-            th.text_dim,
-            false,
-        );
-        if s.is_all_last() && s.phase != Phase::GameOver {
+            )
+        } else {
+            format!("供託 {}本", s.kyotaku)
+        };
+        k.text(q, kyotaku, 36.0, th.text_dim, false);
+        if pr.show_all_last && s.is_all_last() && s.phase != Phase::GameOver {
             q.spawn((
                 center(Node {
                     padding: UiRect::axes(Val::Px(12.0), Val::Px(2.0)),
@@ -398,7 +419,12 @@ fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId, shown: 
     let top_score = s.seats[top.index()].score;
     p.spawn((abs(1066.0, 100.0, 854.0, 300.0), BackgroundColor(th.panel)))
         .with_children(|q| {
-            for (i, seat) in SeatId::ALL.iter().enumerate() {
+            // 並び順: 席順固定／順位順（設定のレイアウトタブ）
+            let order: Vec<SeatId> = match k.prefs.layout.score_order {
+                crate::prefs::ScoreOrder::Seat => SeatId::ALL.to_vec(),
+                crate::prefs::ScoreOrder::Rank => s.rank_order(),
+            };
+            for (i, seat) in order.iter().enumerate() {
                 let st = &s.seats[seat.index()];
                 let bg = if *seat == face_seat {
                     th.panel_alt
@@ -441,7 +467,12 @@ fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId, shown: 
                     })
                     .with_children(|c| {
                         k.text(c, st.player.name.clone(), 34.0, th.text, true);
-                        if let Some(a) = &st.player.affiliation {
+                        if let Some(a) = st
+                            .player
+                            .affiliation
+                            .as_ref()
+                            .filter(|_| k.prefs.layout.show_affiliation)
+                        {
                             k.text(c, a.clone(), 18.0, th.text_dim, false);
                         }
                     });
@@ -484,7 +515,7 @@ fn draw_scores(p: &mut Kids, k: &Kit, s: &TableState, face_seat: SeatId, shown: 
                                 if d > 0 { th.plus } else { th.minus },
                                 true,
                             );
-                        } else if *seat != top {
+                        } else if *seat != top && k.prefs.layout.show_score_diff {
                             k.text(
                                 c,
                                 delta_text(st.score - top_score),
@@ -528,10 +559,12 @@ fn draw_dice(p: &mut Kids, k: &Kit, s: &TableState) {
         })
         .with_children(|c| {
             k.text(c, "サイコロ", 22.0, th.text_dim, false);
-            if s.dice.is_empty() {
+            let hide = s.phase != Phase::InHand
+                && k.prefs.layout.dice_prev == crate::prefs::DicePrev::Hidden;
+            if s.dice.is_empty() || hide {
                 k.text(c, "—", 48.0, th.text_dim, false);
             }
-            for &(a, b) in &s.dice {
+            for &(a, b) in s.dice.iter().filter(|_| !hide) {
                 let faded = s.phase != Phase::InHand;
                 c.spawn(row(Node::default(), 10.0)).with_children(|r| {
                     k.die(r, a, 64.0, faded);
@@ -544,7 +577,9 @@ fn draw_dice(p: &mut Kids, k: &Kit, s: &TableState) {
 }
 
 fn draw_dora(p: &mut Kids, k: &Kit, s: &TableState) {
+    use crate::prefs::DoraMode;
     let th = k.theme;
+    let mode = k.prefs.layout.dora_mode;
     p.spawn((
         center(abs(1326.0, 400.0, 334.0, 200.0)),
         BackgroundColor(th.panel),
@@ -553,29 +588,53 @@ fn draw_dora(p: &mut Kids, k: &Kit, s: &TableState) {
         q.spawn(Node {
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
-            row_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
             ..default()
         })
         .with_children(|c| {
-            k.text(c, "ドラ表示牌", 22.0, th.text_dim, false);
+            let label = match mode {
+                DoraMode::Indicator => "ドラ表示牌",
+                DoraMode::Dora => "ドラ",
+                DoraMode::Both => "ドラ表示牌 → ドラ",
+            };
+            k.text(c, label, 22.0, th.text_dim, false);
             let n = s.dora_indicators.len().max(1) as f32;
-            // 槓ドラで増えたら縮小して並べる（最大5枚）
-            let w = (290.0 / n - 6.0).min(80.0);
-            c.spawn(row(Node::default(), 6.0)).with_children(|r| {
-                if s.dora_indicators.is_empty() {
-                    k.tile(r, None, w, false, true);
-                }
-                for t in &s.dora_indicators {
-                    k.tile(r, Some(*t), w, false, false);
-                }
-            });
+            // 槓ドラで増えたら縮小して並べる（最大5枚）。両方のときは2段で小さく
+            let full = if mode == DoraMode::Both { 56.0 } else { 80.0 };
+            let w = (290.0 / n - 6.0).min(full);
+            let rows: Vec<Vec<janscope_core::tile::Tile>> = match mode {
+                DoraMode::Indicator => vec![s.dora_indicators.clone()],
+                DoraMode::Dora => vec![
+                    s.dora_indicators
+                        .iter()
+                        .map(|t| t.dora_from_indicator())
+                        .collect(),
+                ],
+                DoraMode::Both => vec![
+                    s.dora_indicators.clone(),
+                    s.dora_indicators
+                        .iter()
+                        .map(|t| t.dora_from_indicator())
+                        .collect(),
+                ],
+            };
+            for tiles in rows {
+                c.spawn(row(Node::default(), 6.0)).with_children(|r| {
+                    if tiles.is_empty() {
+                        k.tile(r, None, w, false, true);
+                    }
+                    for t in &tiles {
+                        k.tile(r, Some(*t), w, false, false);
+                    }
+                });
+            }
         });
     });
 }
 
 fn draw_wall(p: &mut Kids, k: &Kit, s: &TableState) {
     let th = k.theme;
-    let low = s.phase == Phase::InHand && s.wall_remaining <= 4;
+    let low = s.phase == Phase::InHand && s.wall_remaining <= k.prefs.presentation.wall_warn_at;
     p.spawn((
         center(abs(1660.0, 400.0, 260.0, 200.0)),
         BackgroundColor(if low { th.warn } else { th.panel_alt }),

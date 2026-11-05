@@ -38,3 +38,10 @@ impl Default for Theme {
         }
     }
 }
+
+/// 設定（テーマタブ）が変わったら描画用のテーマを作り直す。
+pub fn sync_theme(cfg: Res<crate::config::ClientConfig>, mut theme: ResMut<Theme>) {
+    if cfg.is_changed() {
+        *theme = cfg.prefs.theme.to_theme();
+    }
+}

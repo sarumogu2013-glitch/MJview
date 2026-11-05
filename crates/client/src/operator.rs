@@ -204,6 +204,9 @@ pub fn operator_ui(
     mut replay: ResMut<crate::replay::Replay>,
 ) -> Result {
     let Some(tiles) = tiles else { return Ok(()) };
+    if tiles.is_changed() {
+        ui_state.tex.clear();
+    }
     if ui_state.tex.is_empty() {
         for t in palette_tiles() {
             let id = contexts.add_image(EguiTextureHandle::Strong(tiles.get(t)));
@@ -225,40 +228,40 @@ pub fn operator_ui(
     u.registry = lib.players.clone();
 
     // 専用キー（文字入力中は無効）
+    // 専用キー（設定のショートカットタブで変更できる。文字入力中は無効）
     if !ctx.egui_wants_keyboard_input() {
+        use crate::prefs::pressed;
+        let sc = cfg.prefs.shortcuts.clone();
         let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        if keys.just_pressed(KeyCode::NumpadSubtract) {
+        if pressed(&keys, &sc.wall_down) {
             net.act(Action::WallDecrement);
         }
-        if keys.just_pressed(KeyCode::NumpadAdd) {
+        if pressed(&keys, &sc.wall_up) {
             net.act(Action::WallIncrement);
         }
-        if ctrl && keys.just_pressed(KeyCode::KeyZ) {
+        if ctrl && pressed(&keys, &sc.undo) {
             net.undo();
         }
-        if ctrl && keys.just_pressed(KeyCode::KeyY) {
+        if ctrl && pressed(&keys, &sc.redo) {
             net.redo();
         }
-        for (i, k) in [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4]
-            .iter()
-            .enumerate()
-        {
-            if keys.just_pressed(*k) {
+        for (i, k) in sc.face.iter().enumerate() {
+            if pressed(&keys, k) {
                 face.sw.manual(SeatId(i as u8), time.elapsed_secs_f64());
             }
         }
         if scenes.sw.program == janscope_core::scene::SceneKind::Replay && replay.paifu.is_some() {
-            if keys.just_pressed(KeyCode::ArrowRight) {
+            if pressed(&keys, &sc.replay_forward) {
                 replay.step_by(1);
             }
-            if keys.just_pressed(KeyCode::ArrowLeft) {
+            if pressed(&keys, &sc.replay_back) {
                 replay.step_by(-1);
             }
-            if keys.just_pressed(KeyCode::Space) {
+            if pressed(&keys, &sc.replay_play) {
                 replay.playing = !replay.playing;
             }
         }
-        if keys.just_pressed(KeyCode::F5) {
+        if pressed(&keys, &sc.face_auto) {
             face.sw.auto(time.elapsed_secs_f64());
         }
     }
@@ -495,7 +498,7 @@ pub fn operator_ui(
     egui::CentralPanel::default().show(&mut root, |ui| {
         if role.0 == janscope_core::protocol::ClientRole::Broadcast {
             scene_panel(ui, u, &mut scenes, &state, now);
-            replay_panel(ui, &mut replay);
+            replay_panel(ui, &mut replay, &cfg.prefs.replay);
             ui.separator();
         }
         egui::ScrollArea::vertical().show(ui, |ui| match state.phase {
@@ -1609,7 +1612,14 @@ fn tournament_panel(
 }
 
 /// 牌譜再生の操作（設計書 4.9 操作）。
-fn replay_panel(ui: &mut egui::Ui, r: &mut crate::replay::Replay) {
+fn replay_panel(ui: &mut egui::Ui, r: &mut crate::replay::Replay, rp: &crate::prefs::ReplayPrefs) {
+    if r.file.is_empty() && !rp.folder.is_empty() {
+        r.file = format!(
+            "{}{}",
+            rp.folder.trim_end_matches(['/', '\\']),
+            std::path::MAIN_SEPARATOR
+        );
+    }
     ui.collapsing("牌譜再生（天鳳形式 JSON）", |ui| {
         ui.horizontal(|ui| {
             ui.add(
@@ -1620,6 +1630,10 @@ fn replay_panel(ui: &mut egui::Ui, r: &mut crate::replay::Replay) {
             if ui.button("開く").clicked() {
                 let p = r.file.clone();
                 r.open(&p);
+                // 設定の牌譜再生タブの既定値
+                r.viewpoint = SeatId(rp.viewpoint % 4);
+                r.open_all = rp.open_all;
+                r.speed = rp.speed;
             }
         });
         let Some(pf) = r.paifu.clone() else {

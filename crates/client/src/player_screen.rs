@@ -20,30 +20,6 @@ pub struct PlayerCamera;
 #[derive(Component)]
 pub struct PlayerRoot;
 
-/// 選手用画面の設定（設計書 4.6「選手用画面」タブ）。
-#[derive(Resource, Clone)]
-pub struct PlayerScreenConfig {
-    /// 画面の下に来る席
-    pub bottom: SeatId,
-    /// 他家の点数を表示する
-    pub show_others: bool,
-    /// 点差を表示する
-    pub show_diff: bool,
-    /// 卓配置（false なら一覧）
-    pub table_layout: bool,
-}
-
-impl Default for PlayerScreenConfig {
-    fn default() -> Self {
-        PlayerScreenConfig {
-            bottom: SeatId(0),
-            show_others: true,
-            show_diff: true,
-            table_layout: true,
-        }
-    }
-}
-
 #[derive(Resource, Default)]
 pub struct PlayerDirty(String);
 
@@ -51,7 +27,7 @@ pub struct PlayerDirty(String);
 pub fn rebuild_player_screen(
     mut commands: Commands,
     table: Res<Table>,
-    cfg: Res<PlayerScreenConfig>,
+    ccfg: Res<crate::config::ClientConfig>,
     mut dirty: ResMut<PlayerDirty>,
     roots: Query<Entity, With<PlayerRoot>>,
     cam: Query<Entity, With<PlayerCamera>>,
@@ -62,10 +38,8 @@ pub fn rebuild_player_screen(
     let (Some(fonts), Some(tiles), Ok(cam)) = (fonts, tiles, cam.single()) else {
         return;
     };
-    let key = format!(
-        "{}|{}|{}|{}|{}",
-        table.seq, cfg.bottom.0, cfg.show_others, cfg.show_diff, cfg.table_layout
-    );
+    let cfg = &ccfg.prefs.player_screen;
+    let key = format!("{}|{:?}|{:?}", table.seq, cfg, ccfg.prefs.theme);
     if key == dirty.0 {
         return;
     }
@@ -79,6 +53,7 @@ pub fn rebuild_player_screen(
         fonts: &fonts,
         tiles: &tiles,
         theme: &theme,
+        prefs: &ccfg.prefs,
     };
     commands
         .spawn((
@@ -98,11 +73,11 @@ pub fn rebuild_player_screen(
                         kit.text(q, "接続を待っています", 56.0, theme.text_dim, false)
                     });
             }
-            Some(v) => draw(p, &kit, v, &cfg),
+            Some(v) => draw(p, &kit, v, cfg),
         });
 }
 
-fn draw(p: &mut Kids, k: &Kit, v: &PublicView, cfg: &PlayerScreenConfig) {
+fn draw(p: &mut Kids, k: &Kit, v: &PublicView, cfg: &crate::prefs::PlayerScreenPrefs) {
     let th = k.theme;
     // 局情報（大きく）
     p.spawn((
@@ -174,7 +149,7 @@ fn draw(p: &mut Kids, k: &Kit, v: &PublicView, cfg: &PlayerScreenConfig) {
         (660.0, 170.0),
         (20.0, 480.0),
     ];
-    let me = cfg.bottom;
+    let me = SeatId(cfg.bottom % 4);
     let top = v.seats.iter().map(|s| s.score).max().unwrap_or(0);
     for k_i in 0..4u8 {
         let seat = SeatId((me.0 + k_i) % 4);

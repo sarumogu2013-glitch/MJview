@@ -133,6 +133,7 @@ pub enum Tab {
     #[default]
     Rules,
     Players,
+    Pref(crate::settings_prefs::PrefTab),
 }
 
 #[derive(Resource, Default)]
@@ -147,10 +148,23 @@ pub struct SettingsUi {
     confirm_apply: bool,
     confirm_delete: bool,
     players_draft: Option<Vec<Player>>,
+    prefs_draft: Option<crate::prefs::Prefs>,
+    key_wait: Option<String>,
 }
 
 impl SettingsUi {
     /// ルールタブを開いて、そのルールを編集中にする（確認用）。
+    /// 指定のタブを開く（確認用）。
+    pub fn open_tab(&mut self, name: &str) {
+        self.open = true;
+        if let Some(t) = crate::settings_prefs::PrefTab::ALL
+            .into_iter()
+            .find(|t| t.name() == name)
+        {
+            self.tab = Tab::Pref(t);
+        }
+    }
+
     pub fn open_rules(&mut self, c: GameConfig) {
         self.open = true;
         self.tab = Tab::Rules;
@@ -164,6 +178,8 @@ pub fn settings_ui(
     mut lib: ResMut<Library>,
     table: Res<Table>,
     net: Res<Net>,
+    mut cfg: ResMut<crate::config::ClientConfig>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) -> Result {
     if !st.open {
         return Ok(());
@@ -176,9 +192,12 @@ pub fn settings_ui(
         .default_size([900.0, 700.0])
         .vscroll(true)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut st.tab, Tab::Rules, "ルール");
                 ui.selectable_value(&mut st.tab, Tab::Players, "選手");
+                for t in crate::settings_prefs::PrefTab::ALL {
+                    ui.selectable_value(&mut st.tab, Tab::Pref(t), t.name());
+                }
                 ui.weak(
                     "（顔カメラ・OBS・切替・ディレイは左の欄の「顔カメラ・OBS 連携・切替の設定」）",
                 );
@@ -187,6 +206,7 @@ pub fn settings_ui(
             match st.tab {
                 Tab::Rules => rules_tab(ui, st, &mut lib, &table, &net),
                 Tab::Players => players_tab(ui, st, &mut lib),
+                Tab::Pref(t) => prefs_page(ui, st, t, &mut cfg, &keys),
             }
             if let Some(m) = &st.msg {
                 ui.separator();
@@ -588,4 +608,58 @@ fn players_tab(ui: &mut egui::Ui, st: &mut SettingsUi, lib: &mut Library) {
         2 => st.players_draft = None,
         _ => {}
     }
+}
+
+/// 見た目・演出・操作のタブ（下書きを編集し、「適用」で保存）。
+fn prefs_page(
+    ui: &mut egui::Ui,
+    st: &mut SettingsUi,
+    tab: crate::settings_prefs::PrefTab,
+    cfg: &mut crate::config::ClientConfig,
+    keys: &ButtonInput<KeyCode>,
+) {
+    use crate::settings_prefs::PrefTab;
+    let mut draft = st.prefs_draft.take().unwrap_or_else(|| cfg.prefs.clone());
+    crate::settings_prefs::prefs_tab(ui, tab, &mut draft, &mut st.key_wait, keys, &mut st.msg);
+    if tab == PrefTab::Data {
+        st.prefs_draft = Some(draft);
+        return;
+    }
+    ui.separator();
+    let errors = !draft.shortcuts.duplicates().is_empty();
+    let changed = draft != cfg.prefs;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(changed && !errors, egui::Button::new("適用"))
+            .clicked()
+        {
+            cfg.prefs = draft.clone();
+            st.msg = Some(match cfg.save() {
+                Ok(()) => "保存しました".into(),
+                Err(e) => e,
+            });
+        }
+        if ui
+            .add_enabled(changed, egui::Button::new("キャンセル"))
+            .clicked()
+        {
+            draft = cfg.prefs.clone();
+        }
+        if ui.button("このタブを既定値に戻す").clicked() {
+            let d = crate::prefs::Prefs::default();
+            match tab {
+                PrefTab::PlayerScreen => draft.player_screen = d.player_screen,
+                PrefTab::Layout => draft.layout = d.layout,
+                PrefTab::Theme => draft.theme = d.theme,
+                PrefTab::Presentation => draft.presentation = d.presentation,
+                PrefTab::Shortcuts => draft.shortcuts = d.shortcuts,
+                PrefTab::Replay => draft.replay = d.replay,
+                PrefTab::Data => {}
+            }
+        }
+        if changed {
+            ui.colored_label(egui::Color32::YELLOW, "未適用の変更があります");
+        }
+    });
+    st.prefs_draft = Some(draft);
 }

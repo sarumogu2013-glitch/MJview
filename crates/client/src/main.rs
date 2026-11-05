@@ -16,10 +16,12 @@ mod net;
 mod operator;
 mod output;
 mod player_screen;
+mod prefs;
 mod program;
 mod replay;
 mod scenes;
 mod settings;
+mod settings_prefs;
 mod theme;
 mod ui_kit;
 
@@ -156,9 +158,9 @@ fn main() {
     .insert_resource(config::ClientConfig::load())
     .init_resource::<output::WinShow>()
     .init_resource::<output::OutputDirty>()
-    .init_resource::<player_screen::PlayerScreenConfig>()
     .init_resource::<player_screen::PlayerDirty>()
-    .add_systems(Startup, load_assets);
+    .add_systems(Startup, load_assets)
+    .add_systems(PreUpdate, (theme::sync_theme, sync_tiles));
 
     if args.demo {
         // 見本の状態を表示する。操作ウィンドウも描けるよう、つながらない宛先の接続を置いておく（状態は取り込まない）
@@ -170,8 +172,10 @@ fn main() {
     }
 
     if player {
-        app.add_systems(Startup, setup_player_window)
-            .add_systems(Update, player_screen::rebuild_player_screen);
+        app.add_systems(Startup, setup_player_window).add_systems(
+            Update,
+            (reload_config_file, player_screen::rebuild_player_screen).chain(),
+        );
     } else {
         app.add_plugins(EguiPlugin::default())
             .init_resource::<operator::OperatorUi>()
@@ -212,18 +216,53 @@ fn main() {
     app.run();
 }
 
-fn load_assets(
+fn load_assets(mut commands: Commands, server: Res<AssetServer>) {
+    commands.insert_resource(assets::load_fonts(&server));
+}
+
+/// 牌画像を読み込む（テーマタブで通常版／黒版を切り替えたら読み直す）。
+fn sync_tiles(
     mut commands: Commands,
-    server: Res<AssetServer>,
+    cfg: Res<config::ClientConfig>,
     mut images: ResMut<Assets<Image>>,
+    mut last: Local<Option<prefs::TileThemeChoice>>,
 ) {
-    match assets::load_tile_images(&mut images, assets::TileTheme::Regular) {
-        Ok(t) => {
-            commands.insert_resource(t);
-        }
+    let want = cfg.prefs.theme.tiles;
+    if *last == Some(want) {
+        return;
+    }
+    *last = Some(want);
+    let theme = match want {
+        prefs::TileThemeChoice::Regular => assets::TileTheme::Regular,
+        prefs::TileThemeChoice::Black => assets::TileTheme::Black,
+    };
+    match assets::load_tile_images(&mut images, theme) {
+        Ok(t) => commands.insert_resource(t),
         Err(e) => error!("牌画像を読み込めません: {e}"),
     }
-    commands.insert_resource(assets::load_fonts(&server));
+}
+
+/// 選手用画面は別のプロセスなので、設定ファイルが変わったら読み直す（2秒ごとに確認）。
+fn reload_config_file(
+    time: Res<Time>,
+    mut cfg: ResMut<config::ClientConfig>,
+    mut next: Local<f64>,
+    mut mtime: Local<Option<std::time::SystemTime>>,
+) {
+    let now = time.elapsed_secs_f64();
+    if now < *next {
+        return;
+    }
+    *next = now + 2.0;
+    let m = std::fs::metadata(config::config_path())
+        .and_then(|m| m.modified())
+        .ok();
+    if m.is_some() && m != *mtime {
+        if mtime.is_some() {
+            *cfg = config::ClientConfig::load();
+        }
+        *mtime = m;
+    }
 }
 
 fn setup_player_window(mut commands: Commands) {

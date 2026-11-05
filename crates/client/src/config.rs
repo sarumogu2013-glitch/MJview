@@ -52,6 +52,8 @@ pub struct ClientConfig {
     pub delay_secs: f64,
     /// 顔カメラごとの同期補正（ms、正の値でその映像をさらに遅らせる）
     pub sync_offset_ms: [i32; 4],
+    /// 見た目・演出・操作の設定
+    pub prefs: crate::prefs::Prefs,
 }
 
 impl Default for ClientConfig {
@@ -69,6 +71,7 @@ impl Default for ClientConfig {
             obs: ObsConfig::default(),
             delay_secs: 0.0,
             sync_offset_ms: [0; 4],
+            prefs: crate::prefs::Prefs::default(),
         }
     }
 }

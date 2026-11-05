@@ -13,6 +13,7 @@ pub struct Kit<'a> {
     pub fonts: &'a Fonts,
     pub tiles: &'a TileImages,
     pub theme: &'a Theme,
+    pub prefs: &'a crate::prefs::Prefs,
 }
 
 /// 絶対位置の箱。
