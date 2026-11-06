@@ -64,6 +64,10 @@ enum : UINT {
     ID_LICENSES,
     ID_SOURCE,
     ID_ABOUT,
+    ID_VIEW_INFO,
+    ID_VIEW_BROADCAST,
+    ID_VIEW_INPUT,
+    ID_VIEW_DEMO,
 };
 
 enum : UINT {
@@ -178,10 +182,16 @@ static bool ValidPort(const std::wstring& p) {
 }
 
 // ---- 起動したもの ----
+// 各機能（サーバー・配信クライアント・入力担当・選手用画面・画面の確認）は1つずつ。
+// ツールバーのボタンで起動し、動いている間はボタンが押された状態。もう一度押すと終了する
 struct Child {
     std::wstring name;
     HANDLE process;
     DWORD pid;
+    UINT fn;                  // どの機能か（ID_SERVER など）
+    HWND embedded = nullptr;  // メインウィンドウに埋め込んだ操作ウィンドウ
+    bool waitEmbed = false;   // 埋め込む操作ウィンドウが出るのを待っている
+    ULONGLONG waitUntil = 0;
 };
 
 static HINSTANCE g_inst;
@@ -189,11 +199,8 @@ static HWND g_main, g_status, g_tips;
 // ツールバー: 文字だけの普通のボタンを並べる（画像やコモンコントロールのツールバーは使わない）
 static std::vector<HWND> g_buttons;
 static int g_barH = 0;
-// メインウィンドウに埋め込んでいる操作ウィンドウ（配信クライアント・入力担当）
+// いまメインウィンドウに見せている操作ウィンドウ（埋め込みは複数できる。見せるのは1つ）
 static HWND g_embedded = nullptr;
-static DWORD g_embedPid = 0;
-static DWORD g_embedWaitPid = 0;  // 埋め込む操作ウィンドウを待っている
-static ULONGLONG g_embedWaitUntil = 0;
 static HFONT g_font, g_fontTitle, g_fontSmall;
 static Settings g_set;
 static std::vector<Child> g_children;
@@ -216,12 +223,18 @@ static void SetStatus(int part, const std::wstring& text) {
 
 static void Error(const std::wstring& msg) { MessageBoxW(g_main, msg.c_str(), L"JanScope", MB_OK | MB_ICONWARNING); }
 
+static Child* Running(UINT fn) {
+    for (auto& c : g_children)
+        if (c.fn == fn && WaitForSingleObject(c.process, 0) == WAIT_TIMEOUT) return &c;
+    return nullptr;
+}
+
 /// exe を起動する。console=true ならコンソール（サーバーの接続コードなどが見える窓）を出す
-static bool Launch(const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console, DWORD* pidOut = nullptr) {
+static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console) {
     std::wstring path = InDir(exe);
     if (!Exists(path)) {
         Error(exe + L" が見つかりません。\nJanScope.exe と同じフォルダに置いてください。\n\n" + path);
-        return false;
+        return nullptr;
     }
     std::wstring cmd = L"\"" + path + L"\" " + args;
     STARTUPINFOW si{};
@@ -233,98 +246,16 @@ static bool Launch(const std::wstring& title, const std::wstring& exe, const std
         wchar_t buf[64];
         swprintf(buf, 64, L"（エラー %lu）", GetLastError());
         Error(title + L" を起動できませんでした" + buf);
-        return false;
+        return nullptr;
     }
     CloseHandle(pi.hThread);
-    g_children.push_back({title, pi.hProcess, pi.dwProcessId});
-    if (pidOut) *pidOut = pi.dwProcessId;
-    return true;
-}
-
-static void RefreshChildren() {
-    g_children.erase(std::remove_if(g_children.begin(), g_children.end(),
-                                    [](const Child& c) {
-                                        if (WaitForSingleObject(c.process, 0) == WAIT_OBJECT_0) {
-                                            CloseHandle(c.process);
-                                            return true;
-                                        }
-                                        return false;
-                                    }),
-                     g_children.end());
-    std::wstring t;
-    if (g_children.empty()) {
-        t = L"起動中のもの: なし";
-    } else {
-        t = L"起動中: ";
-        for (size_t i = 0; i < g_children.size(); i++) {
-            if (i) t += L"・";
-            t += g_children[i].name;
-        }
-    }
-    SetStatus(0, t);
-}
-
-static void StopAll() {
-    if (g_children.empty()) return;
-    if (MessageBoxW(g_main, L"起動したもの（サーバー・クライアントなど）をすべて閉じますか？\n配信中・対局中は閉じないでください。",
-                    L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
-        return;
-    for (auto& c : g_children) TerminateProcess(c.process, 0);
-    Sleep(200);
-    RefreshChildren();
-}
-
-static std::wstring ServerAddr() { return g_set.host + L":" + g_set.port; }
-
-static bool NeedCode() {
-    if (ValidCode(g_set.code)) return true;
-    Error(L"接続コード（6桁の数字）が設定されていません。\n「ファイル → 接続の設定」で入れてください。\n（このPCでサーバーを起動すると、自動で作ります）");
-    return false;
-}
-
-static void StartServer(bool resume) {
-    if (!ValidCode(g_set.code)) {
-        g_set.code = NewCode();
-        SaveSettings(g_set);
-    }
-    if (!ValidPort(g_set.port)) {
-        Error(L"ポートの番号が正しくありません。「ファイル → 接続の設定」で直してください。");
-        return;
-    }
-    std::wstring args = L"--port " + g_set.port + L" --code " + g_set.code;
-    if (resume) args += L" --resume-latest";
-    Launch(resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
-    InvalidateRect(g_main, nullptr, TRUE);
-}
-
-static void StartClient(const wchar_t* role) {
-    std::wstring r = role;
-    std::wstring args, title = L"配信クライアント";
-    if (r == L"demo") {
-        args = L"--demo";
-        title = L"画面の確認";
-    } else {
-        if (!NeedCode()) return;
-        args = L"--server " + ServerAddr() + L" --code " + g_set.code;
-    }
-    if (r == L"input") {
-        args += L" --role input";
-        title = L"入力担当";
-    } else if (r == L"player") {
-        args += L" --role player";
-        if (g_set.playerFullscreen) args += L" --fullscreen --monitor " + g_set.playerMonitor;
-        title = L"選手用画面";
-    }
-    // 操作ウィンドウはメインウィンドウに埋め込む（1つだけ。2つ目からは別のウィンドウ）
-    bool embed = r != L"player" && !g_embedded && !g_embedWaitPid;
-    if (embed) args += L" --embed";
-    DWORD pid = 0;
-    if (Launch(title, L"janscope-client.exe", args, false, &pid) && embed) {
-        g_embedWaitPid = pid;
-        g_embedWaitUntil = GetTickCount64() + 30000;
-        SetTimer(g_main, TIMER_EMBED, 100, nullptr);
-        SetStatus(1, title + L" の操作画面を開いています…");
-    }
+    Child c;
+    c.name = title;
+    c.process = pi.hProcess;
+    c.pid = pi.dwProcessId;
+    c.fn = fn;
+    g_children.push_back(c);
+    return &g_children.back();
 }
 
 // ---- 操作ウィンドウの埋め込み ----
@@ -363,7 +294,19 @@ static void FitEmbedded() {
     SetWindowPos(g_embedded, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
-static void Embed(HWND op) {
+/// 埋め込んだ操作ウィンドウのうち、これを見せる（ほかは隠す）。nullptr ならバージョン情報を見せる
+static void ShowEmbedded(HWND op) {
+    for (auto& c : g_children)
+        if (c.embedded && c.embedded != op && IsWindow(c.embedded)) ShowWindow(c.embedded, SW_HIDE);
+    g_embedded = op;
+    if (op) {
+        FitEmbedded();
+        SetFocus(op);
+    }
+    InvalidateRect(g_main, nullptr, TRUE);
+}
+
+static void Embed(Child& c, HWND op) {
     LONG_PTR st = GetWindowLongPtrW(op, GWL_STYLE);
     st &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
     st |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
@@ -372,47 +315,171 @@ static void Embed(HWND op) {
     ex &= ~(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
     SetWindowLongPtrW(op, GWL_EXSTYLE, ex);
     SetParent(op, g_main);
-    g_embedded = op;
+    c.embedded = op;
+    c.waitEmbed = false;
     // 操作画面が入る大きさにする（作業領域いっぱい）
     if (!IsZoomed(g_main)) ShowWindow(g_main, SW_MAXIMIZE);
     SetWindowPos(op, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    FitEmbedded();
-    SetFocus(op);
-    SetStatus(1, L"操作画面をこのウィンドウに出しています（出力ウィンドウは別に開きます）");
-}
-
-/// 埋め込んだ操作ウィンドウのプロセスが終わったか見る
-static void CheckEmbedded() {
-    if (g_embedded && !IsWindow(g_embedded)) {
-        g_embedded = nullptr;
-        g_embedPid = 0;
-        SetStatus(1, L"");
-        InvalidateRect(g_main, nullptr, TRUE);
-    }
+    ShowEmbedded(op);
+    SetStatus(1, c.name + L" の操作画面をこのウィンドウに出しています（切替は「表示」メニュー）");
 }
 
 static void OnEmbedTimer() {
-    if (!g_embedWaitPid) {
-        KillTimer(g_main, TIMER_EMBED);
+    bool waiting = false;
+    for (auto& c : g_children) {
+        if (!c.waitEmbed) continue;
+        FindCtx f{c.pid, nullptr};
+        EnumWindows(FindOperator, (LPARAM)&f);
+        if (f.found) {
+            Embed(c, f.found);
+            continue;
+        }
+        bool alive = WaitForSingleObject(c.process, 0) == WAIT_TIMEOUT;
+        if (!alive || GetTickCount64() > c.waitUntil) {
+            c.waitEmbed = false;
+            SetStatus(1, alive ? c.name + L" の操作画面を埋め込めませんでした（別のウィンドウのままです）" : c.name + L" が終了しました");
+            continue;
+        }
+        waiting = true;
+    }
+    if (!waiting) KillTimer(g_main, TIMER_EMBED);
+}
+
+// ---- ボタンの押された状態 ----
+static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO};
+
+static void UpdateToggleButtons() {
+    for (UINT fn : kToggles) {
+        HWND b = GetDlgItem(g_main, (int)fn);
+        if (b) SendMessageW(b, BM_SETCHECK, Running(fn) ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+}
+
+static void RefreshChildren() {
+    bool shownGone = false;
+    g_children.erase(std::remove_if(g_children.begin(), g_children.end(),
+                                    [&](const Child& c) {
+                                        if (WaitForSingleObject(c.process, 0) == WAIT_OBJECT_0) {
+                                            if (c.embedded && c.embedded == g_embedded) shownGone = true;
+                                            CloseHandle(c.process);
+                                            return true;
+                                        }
+                                        return false;
+                                    }),
+                     g_children.end());
+    if (g_embedded && !IsWindow(g_embedded)) shownGone = true;
+    if (shownGone) {
+        // 見せていた操作画面が終わった: 残っている埋め込みのうち最後のもの、なければバージョン情報
+        HWND next = nullptr;
+        for (auto& c : g_children)
+            if (c.embedded && IsWindow(c.embedded)) next = c.embedded;
+        ShowEmbedded(next);
+        if (!next) SetStatus(1, L"");
+    }
+    std::wstring t;
+    if (g_children.empty()) {
+        t = L"起動中のもの: なし";
+    } else {
+        t = L"起動中: ";
+        for (size_t i = 0; i < g_children.size(); i++) {
+            if (i) t += L"・";
+            t += g_children[i].name;
+        }
+    }
+    SetStatus(0, t);
+    UpdateToggleButtons();
+}
+
+static void Stop(Child* c) {
+    TerminateProcess(c->process, 0);
+    WaitForSingleObject(c->process, 2000);
+    RefreshChildren();
+}
+
+static void StopAll() {
+    if (g_children.empty()) return;
+    if (MessageBoxW(g_main, L"起動したもの（サーバー・クライアントなど）をすべて閉じますか？\n配信中・対局中は閉じないでください。",
+                    L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+        return;
+    for (auto& c : g_children) TerminateProcess(c.process, 0);
+    Sleep(300);
+    RefreshChildren();
+}
+
+static std::wstring ServerAddr() { return g_set.host + L":" + g_set.port; }
+
+static bool NeedCode() {
+    if (ValidCode(g_set.code)) return true;
+    Error(L"接続コード（6桁の数字）が設定されていません。\n「ファイル → 接続の設定」で入れてください。\n（このPCでサーバーを起動すると、自動で作ります）");
+    return false;
+}
+
+static void StartServer(bool resume) {
+    if (!ValidCode(g_set.code)) {
+        g_set.code = NewCode();
+        SaveSettings(g_set);
+    }
+    if (!ValidPort(g_set.port)) {
+        Error(L"ポートの番号が正しくありません。「ファイル → 接続の設定」で直してください。");
         return;
     }
-    FindCtx c{g_embedWaitPid, nullptr};
-    EnumWindows(FindOperator, (LPARAM)&c);
-    if (c.found) {
-        g_embedPid = g_embedWaitPid;
-        g_embedWaitPid = 0;
-        KillTimer(g_main, TIMER_EMBED);
-        Embed(c.found);
+    std::wstring args = L"--port " + g_set.port + L" --code " + g_set.code;
+    if (resume) args += L" --resume-latest";
+    Launch(ID_SERVER, resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
+    InvalidateRect(g_main, nullptr, TRUE);
+}
+
+static void StartClient(UINT fn) {
+    std::wstring args, title = L"配信クライアント";
+    if (fn == ID_DEMO) {
+        args = L"--demo";
+        title = L"画面の確認";
+    } else {
+        if (!NeedCode()) return;
+        args = L"--server " + ServerAddr() + L" --code " + g_set.code;
+    }
+    if (fn == ID_INPUT) {
+        args += L" --role input";
+        title = L"入力担当";
+    } else if (fn == ID_PLAYER) {
+        args += L" --role player";
+        if (g_set.playerFullscreen) args += L" --fullscreen --monitor " + g_set.playerMonitor;
+        title = L"選手用画面";
+    }
+    // 操作ウィンドウはメインウィンドウに埋め込む（選手用画面は選手側のモニターに出すので別ウィンドウ）
+    bool embed = fn != ID_PLAYER;
+    if (embed) args += L" --embed";
+    Child* c = Launch(fn, title, L"janscope-client.exe", args, false);
+    if (c && embed) {
+        c->waitEmbed = true;
+        c->waitUntil = GetTickCount64() + 30000;
+        SetTimer(g_main, TIMER_EMBED, 100, nullptr);
+        SetStatus(1, title + L" の操作画面を開いています…");
+    }
+}
+
+/// ボタン: 動いていなければ起動、動いていれば終了（サーバーと配信クライアントは確認する）
+static void Toggle(UINT fn) {
+    if (Child* c = Running(fn)) {
+        if (fn == ID_SERVER || fn == ID_BROADCAST) {
+            std::wstring q = c->name + L" を終了しますか？\n配信中・対局中は終了しないでください。";
+            if (MessageBoxW(g_main, q.c_str(), L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+                UpdateToggleButtons();
+                return;
+            }
+        }
+        Stop(c);
         return;
     }
-    bool alive = std::any_of(g_children.begin(), g_children.end(), [](const Child& ch) {
-        return ch.pid == g_embedWaitPid && WaitForSingleObject(ch.process, 0) == WAIT_TIMEOUT;
-    });
-    if (!alive || GetTickCount64() > g_embedWaitUntil) {
-        g_embedWaitPid = 0;
-        KillTimer(g_main, TIMER_EMBED);
-        SetStatus(1, alive ? L"操作画面を埋め込めませんでした（別のウィンドウのままです）" : L"クライアントが終了しました");
-    }
+    if (fn == ID_SERVER) StartServer(false);
+    else StartClient(fn);
+    UpdateToggleButtons();
+}
+
+/// 「表示」メニュー: 埋め込んだ操作画面を切り替える
+static void ViewEmbedded(UINT fn) {
+    Child* c = Running(fn);
+    if (c && c->embedded && IsWindow(c->embedded)) ShowEmbedded(c->embedded);
 }
 
 // ---- 外部プログラムを動かして出力を受け取る（更新用）----
@@ -707,6 +774,14 @@ static HMENU BuildMenu() {
     AppendMenuW(run, MF_STRING, ID_STOP_ALL, L"起動したものをすべて閉じる(&C)");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)run, L"起動(&R)");
 
+    HMENU view = CreatePopupMenu();
+    AppendMenuW(view, MF_STRING, ID_VIEW_BROADCAST, L"配信クライアントの操作画面(&B)");
+    AppendMenuW(view, MF_STRING, ID_VIEW_INPUT, L"入力担当の操作画面(&I)");
+    AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"画面の確認(&D)");
+    AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view, MF_STRING, ID_VIEW_INFO, L"バージョン情報の表示に戻す(&V)");
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"表示(&V)");
+
     HMENU upd = CreatePopupMenu();
     AppendMenuW(upd, MF_STRING, ID_UPDATE_CHECK, L"新しい版を確かめる(&C)");
     AppendMenuW(upd, MF_STRING, ID_UPDATE_APPLY, L"更新する(&U)...");
@@ -730,6 +805,17 @@ static void UpdateMenuState() {
     CheckMenuItem(m, ID_UPDATE_ON_START, MF_BYCOMMAND | (g_set.checkOnStart ? MF_CHECKED : MF_UNCHECKED));
     EnableMenuItem(m, ID_UPDATE_APPLY, MF_BYCOMMAND | (g_update.available && !g_updating ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_STOP_ALL, MF_BYCOMMAND | (g_children.empty() ? MF_GRAYED : MF_ENABLED));
+    // 起動メニュー: 動いているものに印（選ぶと終了）
+    for (UINT fn : kToggles) CheckMenuItem(m, fn, MF_BYCOMMAND | (Running(fn) ? MF_CHECKED : MF_UNCHECKED));
+    // 表示メニュー: 埋め込んでいるものだけ選べる。見せているものに印
+    const UINT views[][2] = {{ID_VIEW_BROADCAST, ID_BROADCAST}, {ID_VIEW_INPUT, ID_INPUT}, {ID_VIEW_DEMO, ID_DEMO}};
+    for (auto& v : views) {
+        Child* c = Running(v[1]);
+        bool ok = c && c->embedded && IsWindow(c->embedded);
+        EnableMenuItem(m, v[0], MF_BYCOMMAND | (ok ? MF_ENABLED : MF_GRAYED));
+        CheckMenuItem(m, v[0], MF_BYCOMMAND | (ok && c->embedded == g_embedded ? MF_CHECKED : MF_UNCHECKED));
+    }
+    CheckMenuItem(m, ID_VIEW_INFO, MF_BYCOMMAND | (g_embedded ? MF_UNCHECKED : MF_CHECKED));
 }
 
 struct TbItem {
@@ -757,7 +843,10 @@ static void BuildToolbar(HWND parent) {
             g_buttons.push_back(nullptr);  // 区切り
             continue;
         }
-        HWND b = CreateWindowExW(0, L"BUTTON", it.text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10, parent,
+        // 起動するボタンは、動いている間は押された状態（BS_PUSHLIKE のチェックボックス。状態はこちらで付ける）
+        bool toggle = std::find(std::begin(kToggles), std::end(kToggles), it.id) != std::end(kToggles);
+        DWORD style = toggle ? (BS_CHECKBOX | BS_PUSHLIKE) : BS_PUSHBUTTON;
+        HWND b = CreateWindowExW(0, L"BUTTON", it.text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style, 0, 0, 10, 10, parent,
                                  (HMENU)(INT_PTR)it.id, g_inst, nullptr);
         SendMessageW(b, WM_SETFONT, (WPARAM)g_font, TRUE);
         TOOLINFOW ti{};
@@ -934,12 +1023,20 @@ static void OnUpdateDone(DWORD code, std::wstring* out) {
 
 static void OnCommand(UINT id) {
     switch (id) {
-        case ID_SERVER: StartServer(false); break;
-        case ID_SERVER_RESUME: StartServer(true); break;
-        case ID_BROADCAST: StartClient(L"broadcast"); break;
-        case ID_INPUT: StartClient(L"input"); break;
-        case ID_PLAYER: StartClient(L"player"); break;
-        case ID_DEMO: StartClient(L"demo"); break;
+        case ID_SERVER:
+        case ID_BROADCAST:
+        case ID_INPUT:
+        case ID_PLAYER:
+        case ID_DEMO: Toggle(id); break;
+        case ID_SERVER_RESUME:
+            if (Running(ID_SERVER)) Error(L"サーバーはもう動いています。再開するには、いったん終了してください。");
+            else StartServer(true);
+            UpdateToggleButtons();
+            break;
+        case ID_VIEW_BROADCAST: ViewEmbedded(ID_BROADCAST); break;
+        case ID_VIEW_INPUT: ViewEmbedded(ID_INPUT); break;
+        case ID_VIEW_DEMO: ViewEmbedded(ID_DEMO); break;
+        case ID_VIEW_INFO: ShowEmbedded(nullptr); break;
         case ID_STOP_ALL: StopAll(); break;
         case ID_SETTINGS: ShowSettings(); break;
         case ID_EXIT: SendMessageW(g_main, WM_CLOSE, 0, 0); break;
@@ -1005,7 +1102,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_TIMER:
             if (w == TIMER_CHILDREN) {
                 RefreshChildren();
-                CheckEmbedded();
                 UpdateMenuState();
             } else if (w == TIMER_EMBED) {
                 OnEmbedTimer();
@@ -1016,18 +1112,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         case WM_PARENTNOTIFY:
             // 埋め込んだ操作ウィンドウが閉じた
-            if (LOWORD(w) == WM_DESTROY && (HWND)l == g_embedded) {
-                g_embedded = nullptr;
-                g_embedPid = 0;
-                InvalidateRect(h, nullptr, TRUE);
-            }
+            if (LOWORD(w) == WM_DESTROY) RefreshChildren();
             return 0;
         case WM_COMMAND: OnCommand(LOWORD(w)); return 0;
         case WM_APP_UPDATE_INFO: OnUpdateInfo((UpdateInfo*)l, w != 0); return 0;
         case WM_APP_UPDATE_DONE: OnUpdateDone((DWORD)w, (std::wstring*)l); return 0;
         case WM_CLOSE:
             if (!g_children.empty() &&
-                MessageBoxW(h, g_embedded ? L"このウィンドウの中の操作画面（と出力ウィンドウ）も閉じます。サーバーなど別のウィンドウのものは動いたままです。\n閉じますか？"
+                MessageBoxW(h, std::any_of(g_children.begin(), g_children.end(), [](const Child& c) { return c.embedded != nullptr; }) ? L"このウィンドウの中の操作画面（と出力ウィンドウ）も閉じます。サーバーなど別のウィンドウのものは動いたままです。\n閉じますか？"
                                           : L"起動したもの（サーバー・クライアントなど）は動いたままになります。\nランチャーだけ閉じますか？",
                             L"JanScope",
                             MB_YESNO | MB_ICONQUESTION) != IDYES)
