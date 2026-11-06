@@ -284,42 +284,44 @@ pub fn operator_ui(
             .layer_id(egui::LayerId::background())
             .max_rect(ctx.viewport_rect()),
     );
-    // いちばん上: メニューバー
-    egui::Panel::top("menu").show(&mut root, |ui| {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("ファイル", |ui| {
-                if ui.button("終了").clicked() {
-                    u.windows.request(crate::windows::WinReq::Quit);
-                    ui.close();
-                }
-            });
-            ui.menu_button("表示", |ui| u.windows.view_menu(ui));
-            ui.menu_button("設定", |ui| {
-                if ui.button("設定ウィンドウ…").clicked() {
-                    settings.open = true;
-                    ui.close();
-                }
-                if ui.button("ルール…").clicked() {
-                    settings.open_tab("ルール");
-                    ui.close();
-                }
-                if ui.button("選手…").clicked() {
-                    settings.open_tab("選手");
-                    ui.close();
-                }
-            });
-            ui.menu_button("ヘルプ", |ui| {
-                if ui.button("更新の確認…").clicked() {
-                    settings.open_tab("更新");
-                    ui.close();
-                }
-                if ui.button("情報…").clicked() {
-                    settings.open_tab("情報");
-                    ui.close();
-                }
+    // いちばん上: メニューバー（ランチャーに埋め込まれているときは、ランチャーのメニューを使うので出さない）
+    if !crate::windows::embedded() {
+        egui::Panel::top("menu").show(&mut root, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("ファイル", |ui| {
+                    if ui.button("終了").clicked() {
+                        u.windows.request(crate::windows::WinReq::Quit);
+                        ui.close();
+                    }
+                });
+                ui.menu_button("表示", |ui| u.windows.view_menu(ui));
+                ui.menu_button("設定", |ui| {
+                    if ui.button("設定ウィンドウ…").clicked() {
+                        settings.open = true;
+                        ui.close();
+                    }
+                    if ui.button("ルール…").clicked() {
+                        settings.open_tab("ルール");
+                        ui.close();
+                    }
+                    if ui.button("選手…").clicked() {
+                        settings.open_tab("選手");
+                        ui.close();
+                    }
+                });
+                ui.menu_button("ヘルプ", |ui| {
+                    if ui.button("更新の確認…").clicked() {
+                        settings.open_tab("更新");
+                        ui.close();
+                    }
+                    if ui.button("情報…").clicked() {
+                        settings.open_tab("情報");
+                        ui.close();
+                    }
+                });
             });
         });
-    });
+    }
     // その下: ツールバー（接続状態・Undo/Redo・設定・全画面・バージョン）
     egui::Panel::top("top").show(&mut root, |ui| {
         ui.horizontal(|ui| {

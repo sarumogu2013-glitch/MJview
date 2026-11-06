@@ -49,6 +49,8 @@ struct Args {
     fullscreen: bool,
     monitor: Option<usize>,
     output_borderless: bool,
+    /// ランチャー（JanScope.exe）のウィンドウに操作ウィンドウを埋め込む
+    embed: bool,
 }
 
 fn usage() -> ! {
@@ -57,7 +59,8 @@ fn usage() -> ! {
          \x20 --role broadcast|input|player  ロール（既定 broadcast）\n\
          \x20 --fullscreen                   選手用画面を全画面にする\n\
          \x20 --monitor <番号>                全画面にするモニター（0から）\n\
-         \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）",
+         \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）\n\
+         \x20 --embed                        操作ウィンドウをランチャー（JanScope.exe）に埋め込む（ランチャーが付ける）",
         janscope_core::VERSION
     );
     std::process::exit(2)
@@ -73,6 +76,7 @@ fn parse_args() -> Args {
         fullscreen: false,
         monitor: None,
         output_borderless: false,
+        embed: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -94,6 +98,7 @@ fn parse_args() -> Args {
             // 以前の、枠を付けるオプション（今は既定で枠あり）
             "--output-decorations" => {}
             "--output-borderless" => a.output_borderless = true,
+            "--embed" => a.embed = true,
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -133,12 +138,21 @@ fn main() {
         }
     } else {
         Window {
+            // ランチャーはこの題名（「JanScope 操作」で始まる）で操作ウィンドウを見つけて埋め込む
             title: format!("JanScope 操作（{}）", role.name_ja()),
             resolution: WindowResolution::new(1500, 980),
             present_mode: PresentMode::AutoVsync,
+            // 埋め込むときは枠なしで画面の外に出し、ランチャーが中に入れる
+            decorations: !args.embed,
+            position: if args.embed {
+                WindowPosition::At(IVec2::new(-30000, -30000))
+            } else {
+                WindowPosition::Automatic
+            },
             ..default()
         }
     };
+    windows::EMBEDDED.store(args.embed, std::sync::atomic::Ordering::Relaxed);
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins

@@ -8,6 +8,14 @@ use bevy::prelude::*;
 use bevy::window::{Monitor, MonitorSelection, PrimaryWindow, WindowMode};
 use bevy_egui::egui;
 
+/// 操作ウィンドウがランチャー（JanScope.exe）に埋め込まれている（--embed）。
+/// そのときはメニューバー・操作ウィンドウの全画面はランチャー側にあるので出さない
+pub static EMBEDDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn embedded() -> bool {
+    EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 出力ウィンドウ（配信に載せる画面）の印
 #[derive(Component)]
 pub struct OutputWindow;
@@ -82,10 +90,21 @@ impl WindowCtl {
             }
             ui.separator();
         }
+        if embedded() {
+            return;
+        }
         let (label, req, tip) = if self.operator_fullscreen {
-            ("操作: ウィンドウに戻す", WinReq::OperatorWindowed, "操作ウィンドウを普通のウィンドウに戻します（F11）")
+            (
+                "操作: ウィンドウに戻す",
+                WinReq::OperatorWindowed,
+                "操作ウィンドウを普通のウィンドウに戻します（F11）",
+            )
         } else {
-            ("操作: 全画面", WinReq::OperatorFullscreen, "この操作ウィンドウを全画面にします（F11）")
+            (
+                "操作: 全画面",
+                WinReq::OperatorFullscreen,
+                "この操作ウィンドウを全画面にします（F11）",
+            )
         };
         if ui.button(label).on_hover_text(tip).clicked() {
             self.request(req);
@@ -114,7 +133,10 @@ impl WindowCtl {
             ui.separator();
         }
         let (label, req) = if self.operator_fullscreen {
-            ("操作ウィンドウをウィンドウに戻す（F11）", WinReq::OperatorWindowed)
+            (
+                "操作ウィンドウをウィンドウに戻す（F11）",
+                WinReq::OperatorWindowed,
+            )
         } else {
             ("操作ウィンドウを全画面（F11）", WinReq::OperatorFullscreen)
         };
@@ -149,9 +171,15 @@ pub fn apply_window_ctl(
         return;
     };
     let ctl = &mut ui.windows;
-    if f11 {
-        let fs = primary.single().is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
-        ctl.request(if fs { WinReq::OperatorWindowed } else { WinReq::OperatorFullscreen });
+    if f11 && !embedded() {
+        let fs = primary
+            .single()
+            .is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
+        ctl.request(if fs {
+            WinReq::OperatorWindowed
+        } else {
+            WinReq::OperatorFullscreen
+        });
     }
     for r in std::mem::take(&mut ctl.requests) {
         match r {
@@ -181,7 +209,14 @@ pub fn apply_window_ctl(
         }
     }
     ctl.has_output = !output.is_empty();
-    ctl.output_fullscreen = output.single().is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
-    ctl.operator_fullscreen = primary.single().is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
-    ctl.monitors = monitors.iter().map(|m| m.name.clone().unwrap_or_default()).collect();
+    ctl.output_fullscreen = output
+        .single()
+        .is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
+    ctl.operator_fullscreen = primary
+        .single()
+        .is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
+    ctl.monitors = monitors
+        .iter()
+        .map(|m| m.name.clone().unwrap_or_default())
+        .collect();
 }

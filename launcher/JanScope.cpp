@@ -71,7 +71,7 @@ enum : UINT {
     WM_APP_UPDATE_DONE,               // wParam: 終了コード, lParam: std::wstring*（出力）
 };
 
-enum { TIMER_CHILDREN = 1 };
+enum { TIMER_CHILDREN = 1, TIMER_EMBED = 2 };
 
 // ---- 文字列 ----
 static std::wstring Widen(const std::string& s) {
@@ -181,10 +181,19 @@ static bool ValidPort(const std::wstring& p) {
 struct Child {
     std::wstring name;
     HANDLE process;
+    DWORD pid;
 };
 
 static HINSTANCE g_inst;
-static HWND g_main, g_toolbar, g_status;
+static HWND g_main, g_status, g_tips;
+// ツールバー: 文字だけの普通のボタンを並べる（画像やコモンコントロールのツールバーは使わない）
+static std::vector<HWND> g_buttons;
+static int g_barH = 0;
+// メインウィンドウに埋め込んでいる操作ウィンドウ（配信クライアント・入力担当）
+static HWND g_embedded = nullptr;
+static DWORD g_embedPid = 0;
+static DWORD g_embedWaitPid = 0;  // 埋め込む操作ウィンドウを待っている
+static ULONGLONG g_embedWaitUntil = 0;
 static HFONT g_font, g_fontTitle, g_fontSmall;
 static Settings g_set;
 static std::vector<Child> g_children;
@@ -208,7 +217,7 @@ static void SetStatus(int part, const std::wstring& text) {
 static void Error(const std::wstring& msg) { MessageBoxW(g_main, msg.c_str(), L"JanScope", MB_OK | MB_ICONWARNING); }
 
 /// exe を起動する。console=true ならコンソール（サーバーの接続コードなどが見える窓）を出す
-static bool Launch(const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console) {
+static bool Launch(const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console, DWORD* pidOut = nullptr) {
     std::wstring path = InDir(exe);
     if (!Exists(path)) {
         Error(exe + L" が見つかりません。\nJanScope.exe と同じフォルダに置いてください。\n\n" + path);
@@ -227,7 +236,8 @@ static bool Launch(const std::wstring& title, const std::wstring& exe, const std
         return false;
     }
     CloseHandle(pi.hThread);
-    g_children.push_back({title, pi.hProcess});
+    g_children.push_back({title, pi.hProcess, pi.dwProcessId});
+    if (pidOut) *pidOut = pi.dwProcessId;
     return true;
 }
 
@@ -289,13 +299,14 @@ static void StartServer(bool resume) {
 
 static void StartClient(const wchar_t* role) {
     std::wstring r = role;
+    std::wstring args, title = L"配信クライアント";
     if (r == L"demo") {
-        Launch(L"画面の確認", L"janscope-client.exe", L"--demo", false);
-        return;
+        args = L"--demo";
+        title = L"画面の確認";
+    } else {
+        if (!NeedCode()) return;
+        args = L"--server " + ServerAddr() + L" --code " + g_set.code;
     }
-    if (!NeedCode()) return;
-    std::wstring args = L"--server " + ServerAddr() + L" --code " + g_set.code;
-    std::wstring title = L"配信クライアント";
     if (r == L"input") {
         args += L" --role input";
         title = L"入力担当";
@@ -304,7 +315,104 @@ static void StartClient(const wchar_t* role) {
         if (g_set.playerFullscreen) args += L" --fullscreen --monitor " + g_set.playerMonitor;
         title = L"選手用画面";
     }
-    Launch(title, L"janscope-client.exe", args, false);
+    // 操作ウィンドウはメインウィンドウに埋め込む（1つだけ。2つ目からは別のウィンドウ）
+    bool embed = r != L"player" && !g_embedded && !g_embedWaitPid;
+    if (embed) args += L" --embed";
+    DWORD pid = 0;
+    if (Launch(title, L"janscope-client.exe", args, false, &pid) && embed) {
+        g_embedWaitPid = pid;
+        g_embedWaitUntil = GetTickCount64() + 30000;
+        SetTimer(g_main, TIMER_EMBED, 100, nullptr);
+        SetStatus(1, title + L" の操作画面を開いています…");
+    }
+}
+
+// ---- 操作ウィンドウの埋め込み ----
+struct FindCtx {
+    DWORD pid;
+    HWND found;
+};
+static BOOL CALLBACK FindOperator(HWND h, LPARAM l) {
+    auto* c = (FindCtx*)l;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != c->pid || !IsWindowVisible(h)) return TRUE;
+    wchar_t t[128];
+    GetWindowTextW(h, t, 128);
+    if (wcsncmp(t, L"JanScope 操作", 11) == 0) {
+        c->found = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static RECT ContentRect() {
+    RECT rc;
+    GetClientRect(g_main, &rc);
+    RECT sb;
+    GetWindowRect(g_status, &sb);
+    rc.top += g_barH;
+    rc.bottom -= sb.bottom - sb.top;
+    if (rc.bottom < rc.top) rc.bottom = rc.top;
+    return rc;
+}
+
+static void FitEmbedded() {
+    if (!g_embedded) return;
+    RECT rc = ContentRect();
+    SetWindowPos(g_embedded, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+static void Embed(HWND op) {
+    LONG_PTR st = GetWindowLongPtrW(op, GWL_STYLE);
+    st &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+    st |= WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+    SetWindowLongPtrW(op, GWL_STYLE, st);
+    LONG_PTR ex = GetWindowLongPtrW(op, GWL_EXSTYLE);
+    ex &= ~(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE);
+    SetWindowLongPtrW(op, GWL_EXSTYLE, ex);
+    SetParent(op, g_main);
+    g_embedded = op;
+    // 操作画面が入る大きさにする（作業領域いっぱい）
+    if (!IsZoomed(g_main)) ShowWindow(g_main, SW_MAXIMIZE);
+    SetWindowPos(op, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    FitEmbedded();
+    SetFocus(op);
+    SetStatus(1, L"操作画面をこのウィンドウに出しています（出力ウィンドウは別に開きます）");
+}
+
+/// 埋め込んだ操作ウィンドウのプロセスが終わったか見る
+static void CheckEmbedded() {
+    if (g_embedded && !IsWindow(g_embedded)) {
+        g_embedded = nullptr;
+        g_embedPid = 0;
+        SetStatus(1, L"");
+        InvalidateRect(g_main, nullptr, TRUE);
+    }
+}
+
+static void OnEmbedTimer() {
+    if (!g_embedWaitPid) {
+        KillTimer(g_main, TIMER_EMBED);
+        return;
+    }
+    FindCtx c{g_embedWaitPid, nullptr};
+    EnumWindows(FindOperator, (LPARAM)&c);
+    if (c.found) {
+        g_embedPid = g_embedWaitPid;
+        g_embedWaitPid = 0;
+        KillTimer(g_main, TIMER_EMBED);
+        Embed(c.found);
+        return;
+    }
+    bool alive = std::any_of(g_children.begin(), g_children.end(), [](const Child& ch) {
+        return ch.pid == g_embedWaitPid && WaitForSingleObject(ch.process, 0) == WAIT_TIMEOUT;
+    });
+    if (!alive || GetTickCount64() > g_embedWaitUntil) {
+        g_embedWaitPid = 0;
+        KillTimer(g_main, TIMER_EMBED);
+        SetStatus(1, alive ? L"操作画面を埋め込めませんでした（別のウィンドウのままです）" : L"クライアントが終了しました");
+    }
 }
 
 // ---- 外部プログラムを動かして出力を受け取る（更新用）----
@@ -452,7 +560,7 @@ static void ApplyUpdate() {
     if (MessageBoxW(g_main, msg.c_str(), L"JanScope の更新", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
     g_updating = true;
     SetStatus(1, L"新しい版を取ってきています…（しばらくかかります）");
-    EnableWindow(g_toolbar, FALSE);
+    for (HWND b : g_buttons) EnableWindow(b, FALSE);
     HWND hwnd = g_main;
     std::thread([hwnd] {
         std::string out;
@@ -640,40 +748,64 @@ static const TbItem kToolbar[] = {
     {ID_UPDATE_CHECK, L"更新の確認", L"新しい版があるか確かめます"},
 };
 
-static HWND BuildToolbar(HWND parent) {
-    HWND tb = CreateWindowExW(0, TOOLBARCLASSNAMEW, nullptr,
-                              WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST | TBSTYLE_TOOLTIPS | CCS_TOP, 0, 0, 0, 0, parent,
-                              nullptr, g_inst, nullptr);
-    SendMessageW(tb, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-    SendMessageW(tb, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_MIXEDBUTTONS);
-    SendMessageW(tb, WM_SETFONT, (WPARAM)g_font, TRUE);
-    std::vector<TBBUTTON> btns;
+/// ツールバー: 文字だけの普通のボタン（BUTTON）を並べる。画像は使わない
+static void BuildToolbar(HWND parent) {
+    g_tips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+                             CW_USEDEFAULT, CW_USEDEFAULT, parent, nullptr, g_inst, nullptr);
     for (const auto& it : kToolbar) {
-        TBBUTTON b{};
         if (!it.id) {
-            b.fsStyle = BTNS_SEP;
-            b.iBitmap = 8;
-        } else {
-            b.iBitmap = I_IMAGENONE;
-            b.idCommand = (int)it.id;
-            b.fsState = TBSTATE_ENABLED;
-            b.fsStyle = BTNS_AUTOSIZE | BTNS_SHOWTEXT | BTNS_BUTTON;
-            b.iString = (INT_PTR)it.text;
+            g_buttons.push_back(nullptr);  // 区切り
+            continue;
         }
-        btns.push_back(b);
+        HWND b = CreateWindowExW(0, L"BUTTON", it.text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10, parent,
+                                 (HMENU)(INT_PTR)it.id, g_inst, nullptr);
+        SendMessageW(b, WM_SETFONT, (WPARAM)g_font, TRUE);
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = parent;
+        ti.uId = (UINT_PTR)b;
+        ti.lpszText = (LPWSTR)it.tip;
+        SendMessageW(g_tips, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+        g_buttons.push_back(b);
     }
-    SendMessageW(tb, TB_ADDBUTTONSW, btns.size(), (LPARAM)btns.data());
-    SendMessageW(tb, TB_AUTOSIZE, 0, 0);
-    return tb;
+}
+
+/// ボタンを文字の幅に合わせて左から並べる
+static void LayoutToolbar(HWND h) {
+    UINT dpi = GetDpiForWindow(h);
+    auto s = [dpi](int v) { return MulDiv(v, dpi, 96); };
+    HDC dc = GetDC(h);
+    HGDIOBJ old = SelectObject(dc, g_font);
+    int x = s(6), y = s(5), bh = s(30);
+    for (size_t i = 0; i < g_buttons.size(); i++) {
+        HWND b = g_buttons[i];
+        if (!b) {
+            x += s(14);
+            continue;
+        }
+        wchar_t t[64];
+        GetWindowTextW(b, t, 64);
+        SIZE sz{};
+        GetTextExtentPoint32W(dc, t, (int)wcslen(t), &sz);
+        int bw = sz.cx + s(24);
+        SetWindowPos(b, nullptr, x, y, bw, bh, SWP_NOZORDER | SWP_NOACTIVATE);
+        SendMessageW(b, WM_SETFONT, (WPARAM)g_font, TRUE);
+        x += bw + s(4);
+    }
+    SelectObject(dc, old);
+    ReleaseDC(h, dc);
+    g_barH = y + bh + s(5);
 }
 
 static void Layout(HWND h) {
-    SendMessageW(g_toolbar, TB_AUTOSIZE, 0, 0);
+    LayoutToolbar(h);
     SendMessageW(g_status, WM_SIZE, 0, 0);
     RECT rc;
     GetClientRect(h, &rc);
     int parts[2] = {MulDiv(rc.right, 55, 100), -1};
     SendMessageW(g_status, SB_SETPARTS, 2, (LPARAM)parts);
+    FitEmbedded();
     InvalidateRect(h, nullptr, TRUE);
 }
 
@@ -698,13 +830,18 @@ static void MakeFonts(UINT dpi) {
 static void Paint(HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
-    RECT rc;
-    GetClientRect(h, &rc);
-    RECT tb, sb;
-    GetWindowRect(g_toolbar, &tb);
-    GetWindowRect(g_status, &sb);
-    rc.top += tb.bottom - tb.top;
-    rc.bottom -= sb.bottom - sb.top;
+    RECT all;
+    GetClientRect(h, &all);
+    // ツールバーの帯（ボタンの後ろ）と区切り線
+    RECT bar{all.left, all.top, all.right, all.top + g_barH};
+    FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
+    RECT line{all.left, bar.bottom - 1, all.right, bar.bottom};
+    FillRect(dc, &line, GetSysColorBrush(COLOR_3DSHADOW));
+    RECT rc = ContentRect();
+    if (g_embedded) {
+        EndPaint(h, &ps);
+        return;
+    }
     FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
     SetBkMode(dc, TRANSPARENT);
     UINT dpi = GetDpiForWindow(h);
@@ -771,7 +908,7 @@ static void OnUpdateInfo(UpdateInfo* info, bool manual) {
 
 static void OnUpdateDone(DWORD code, std::wstring* out) {
     g_updating = false;
-    EnableWindow(g_toolbar, TRUE);
+    for (HWND b : g_buttons) EnableWindow(b, TRUE);
     std::wstring o = Trim(*out);
     delete out;
     if (code == 0) {
@@ -844,7 +981,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             g_main = h;
             MakeFonts(GetDpiForWindow(h));
             SetMenu(h, BuildMenu());
-            g_toolbar = BuildToolbar(h);
+            BuildToolbar(h);
             g_status = CreateWindowExW(0, STATUSCLASSNAMEW, nullptr, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, h, nullptr, g_inst, nullptr);
             SendMessageW(g_status, WM_SETFONT, (WPARAM)g_font, TRUE);
             SetTimer(h, TIMER_CHILDREN, 1000, nullptr);
@@ -857,7 +994,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_SIZE: Layout(h); return 0;
         case WM_DPICHANGED: {
             MakeFonts(HIWORD(w));
-            SendMessageW(g_toolbar, WM_SETFONT, (WPARAM)g_font, TRUE);
             SendMessageW(g_status, WM_SETFONT, (WPARAM)g_font, TRUE);
             RECT* r = (RECT*)l;
             SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -869,24 +1005,31 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_TIMER:
             if (w == TIMER_CHILDREN) {
                 RefreshChildren();
+                CheckEmbedded();
                 UpdateMenuState();
+            } else if (w == TIMER_EMBED) {
+                OnEmbedTimer();
             }
             return 0;
-        case WM_NOTIFY: {
-            auto* hdr = (NMHDR*)l;
-            if (hdr->code == TTN_GETDISPINFOW) {
-                auto* tt = (NMTTDISPINFOW*)l;
-                for (const auto& it : kToolbar)
-                    if (it.id && it.id == hdr->idFrom) tt->lpszText = (LPWSTR)it.tip;
+        case WM_SETFOCUS:
+            if (g_embedded) SetFocus(g_embedded);
+            return 0;
+        case WM_PARENTNOTIFY:
+            // 埋め込んだ操作ウィンドウが閉じた
+            if (LOWORD(w) == WM_DESTROY && (HWND)l == g_embedded) {
+                g_embedded = nullptr;
+                g_embedPid = 0;
+                InvalidateRect(h, nullptr, TRUE);
             }
             return 0;
-        }
         case WM_COMMAND: OnCommand(LOWORD(w)); return 0;
         case WM_APP_UPDATE_INFO: OnUpdateInfo((UpdateInfo*)l, w != 0); return 0;
         case WM_APP_UPDATE_DONE: OnUpdateDone((DWORD)w, (std::wstring*)l); return 0;
         case WM_CLOSE:
             if (!g_children.empty() &&
-                MessageBoxW(h, L"起動したもの（サーバー・クライアントなど）は動いたままになります。\nランチャーだけ閉じますか？", L"JanScope",
+                MessageBoxW(h, g_embedded ? L"このウィンドウの中の操作画面（と出力ウィンドウ）も閉じます。サーバーなど別のウィンドウのものは動いたままです。\n閉じますか？"
+                                          : L"起動したもの（サーバー・クライアントなど）は動いたままになります。\nランチャーだけ閉じますか？",
+                            L"JanScope",
                             MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
             DestroyWindow(h);
@@ -937,7 +1080,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     int w = MulDiv(760, dpi, 96), hgt = MulDiv(440, dpi, 96);
     RECT wa;
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-    HWND h = CreateWindowExW(0, L"JanScopeLauncher", (L"JanScope " + g_version).c_str(), WS_OVERLAPPEDWINDOW,
+    HWND h = CreateWindowExW(0, L"JanScopeLauncher", (L"JanScope " + g_version).c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              wa.left + ((wa.right - wa.left) - w) / 2, wa.top + ((wa.bottom - wa.top) - hgt) / 2, w, hgt, nullptr,
                              nullptr, inst, nullptr);
     if (!h) return 1;
