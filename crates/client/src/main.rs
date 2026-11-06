@@ -26,6 +26,7 @@ mod settings_prefs;
 mod theme;
 mod ui_kit;
 mod update;
+mod windows;
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
@@ -47,7 +48,7 @@ struct Args {
     screenshot: Option<String>,
     fullscreen: bool,
     monitor: Option<usize>,
-    output_decorations: bool,
+    output_borderless: bool,
 }
 
 fn usage() -> ! {
@@ -56,7 +57,7 @@ fn usage() -> ! {
          \x20 --role broadcast|input|player  ロール（既定 broadcast）\n\
          \x20 --fullscreen                   選手用画面を全画面にする\n\
          \x20 --monitor <番号>                全画面にするモニター（0から）\n\
-         \x20 --output-decorations           出力ウィンドウに枠を付ける（確認用）",
+         \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）",
         janscope_core::VERSION
     );
     std::process::exit(2)
@@ -71,7 +72,7 @@ fn parse_args() -> Args {
         screenshot: None,
         fullscreen: false,
         monitor: None,
-        output_decorations: false,
+        output_borderless: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -90,7 +91,9 @@ fn parse_args() -> Args {
             "--screenshot" => a.screenshot = Some(it.next().unwrap_or_else(|| usage())),
             "--fullscreen" => a.fullscreen = true,
             "--monitor" => a.monitor = it.next().and_then(|v| v.parse().ok()),
-            "--output-decorations" => a.output_decorations = true,
+            // 以前の、枠を付けるオプション（今は既定で枠あり）
+            "--output-decorations" => {}
+            "--output-borderless" => a.output_borderless = true,
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -162,7 +165,8 @@ fn main() {
     .init_resource::<output::OutputDirty>()
     .init_resource::<player_screen::PlayerDirty>()
     .add_systems(Startup, load_assets)
-    .add_systems(PreUpdate, (theme::sync_theme, sync_tiles));
+    .add_systems(PreUpdate, (theme::sync_theme, sync_tiles))
+    .add_systems(Update, windows::apply_window_ctl);
 
     if args.demo {
         // 見本の状態を表示する。操作ウィンドウも描けるよう、つながらない宛先の接続を置いておく（状態は取り込まない）
@@ -185,7 +189,7 @@ fn main() {
             .add_systems(
                 Startup,
                 move |c: Commands, s: ResMut<EguiGlobalSettings>| {
-                    setup_operator_windows(c, s, role, args.output_decorations)
+                    setup_operator_windows(c, s, role, !args.output_borderless)
                 },
             )
             .add_systems(
@@ -285,12 +289,14 @@ fn setup_operator_windows(
             .spawn(Window {
                 title: "JanScope 出力".into(),
                 resolution: WindowResolution::new(1920, 1080).with_scale_factor_override(1.0),
+                // 起動時は普通のウィンドウ。全画面は操作ウィンドウのツールバー・メニューから
                 decorations,
                 resizable: false,
-                position: WindowPosition::At(IVec2::new(0, 0)),
+                position: WindowPosition::Automatic,
                 present_mode: PresentMode::AutoVsync,
                 ..default()
             })
+            .insert(windows::OutputWindow)
             .id();
         commands.spawn((
             Camera2d,

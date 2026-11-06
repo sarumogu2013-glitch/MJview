@@ -88,6 +88,8 @@ pub struct OperatorUi {
     csv_msg: Option<String>,
     remove_key: Option<String>,
     cam: crate::cameras::CameraUi,
+    /// ウィンドウの全画面切替（メニューバー・ツールバー）
+    pub windows: crate::windows::WindowCtl,
 }
 
 impl Default for OperatorUi {
@@ -131,6 +133,7 @@ impl Default for OperatorUi {
             csv_msg: None,
             remove_key: None,
             cam: Default::default(),
+            windows: Default::default(),
         }
     }
 }
@@ -281,7 +284,43 @@ pub fn operator_ui(
             .layer_id(egui::LayerId::background())
             .max_rect(ctx.viewport_rect()),
     );
-    // 上部: 接続状態・Undo/Redo・バージョン
+    // いちばん上: メニューバー
+    egui::Panel::top("menu").show(&mut root, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("ファイル", |ui| {
+                if ui.button("終了").clicked() {
+                    u.windows.request(crate::windows::WinReq::Quit);
+                    ui.close();
+                }
+            });
+            ui.menu_button("表示", |ui| u.windows.view_menu(ui));
+            ui.menu_button("設定", |ui| {
+                if ui.button("設定ウィンドウ…").clicked() {
+                    settings.open = true;
+                    ui.close();
+                }
+                if ui.button("ルール…").clicked() {
+                    settings.open_tab("ルール");
+                    ui.close();
+                }
+                if ui.button("選手…").clicked() {
+                    settings.open_tab("選手");
+                    ui.close();
+                }
+            });
+            ui.menu_button("ヘルプ", |ui| {
+                if ui.button("更新の確認…").clicked() {
+                    settings.open_tab("更新");
+                    ui.close();
+                }
+                if ui.button("情報…").clicked() {
+                    settings.open_tab("情報");
+                    ui.close();
+                }
+            });
+        });
+    });
+    // その下: ツールバー（接続状態・Undo/Redo・設定・全画面・バージョン）
     egui::Panel::top("top").show(&mut root, |ui| {
         ui.horizontal(|ui| {
             match &table.link {
@@ -328,6 +367,8 @@ pub fn operator_ui(
             if ui.button("設定").clicked() {
                 settings.open = !settings.open;
             }
+            ui.separator();
+            u.windows.toolbar(ui);
             if cfg.delay_secs > 0.0 {
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 200, 80),

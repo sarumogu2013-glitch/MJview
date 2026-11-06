@@ -161,6 +161,8 @@ impl SettingsUi {
     pub fn open_tab(&mut self, name: &str) {
         self.open = true;
         match name {
+            "ルール" | "rules" => return self.tab = Tab::Rules,
+            "選手" | "players" => return self.tab = Tab::Players,
             "更新" | "update" => return self.tab = Tab::Update,
             "情報" | "about" => return self.tab = Tab::About,
             _ => {}
