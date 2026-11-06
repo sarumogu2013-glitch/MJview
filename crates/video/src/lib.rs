@@ -1,7 +1,9 @@
 //! 顔カメラの取り込み（設計書 4.11）。FFmpeg を別プロセスとして起動し、RTMP を受けて MJPEG で受け取る。
 //!
 //! - FFmpeg は別のプログラムとして呼ぶだけ（リンクしない）。配布では LGPL ビルドの ffmpeg.exe を同梱する
-//! - 受け方は2通り: 配信元のサーバーから引っ張る（Pull）／本ソフト側で待ち受ける（Listen）
+//! - 受け方は2通り: 配信元のサーバーから引っ張る（Pull）／本ソフト側で待ち受ける（Listen）。
+//!   待ち受けは内蔵の RTMP の受け口（[`rtmp_server`]）が1つのポートで全部のカメラを受け、
+//!   キーごとに FLV にして ffmpeg へ流し込む（以前は ffmpeg 自身が待ち受けていたので、同じポートで2台目を受けられなかった）
 //! - FFmpeg が出力ウィンドウの大きさに縮小し、MJPEG（圧縮データ）で渡す。配信ディレイ（段階B7）は
 //!   この圧縮データを時刻付きで溜めて、遅らせてからデコードする
 //! - 途切れたら自動で FFmpeg を起動し直す。一定時間フレームが来なければ「信号なし」
@@ -13,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub mod obs;
+pub mod rtmp_server;
 
 use janscope_core::delay::FrameRing;
 use serde::{Deserialize, Serialize};
@@ -45,14 +48,29 @@ impl StreamConfig {
             .map(|s| s.to_string())
             .collect();
         match self.mode {
-            RtmpMode::Listen => a.extend(["-listen".into(), "1".into()]),
+            // 内蔵の受け口から FLV が標準入力に流れてくる
+            // 形式が分かっているので、入力の下調べ（既定は5秒ぶん溜める）を短くして、すぐ映す
+            RtmpMode::Listen => a.extend(
+                [
+                    "-probesize",
+                    "65536",
+                    "-analyzeduration",
+                    "500000",
+                    "-f",
+                    "flv",
+                    "-i",
+                    "pipe:0",
+                ]
+                .map(String::from),
+            ),
             RtmpMode::Pull => {
                 if self.url.starts_with("rtmp") {
                     a.extend(["-rw_timeout".into(), "5000000".into()]);
                 }
+                a.extend(["-i".into(), self.url.clone()]);
             }
         }
-        a.extend(["-i".into(), self.url.clone(), "-an".into()]);
+        a.push("-an".into());
         let (w, h) = (self.width, self.height);
         a.extend([
             "-vf".into(),
@@ -122,7 +140,10 @@ impl FaceStream {
         let (s2, st2, c2) = (shared.clone(), stop.clone(), child.clone());
         let thread = std::thread::Builder::new()
             .name("janscope-face".into())
-            .spawn(move || run(cfg, s2, st2, c2))
+            .spawn(move || match cfg.mode {
+                RtmpMode::Pull => run(cfg, s2, st2, c2),
+                RtmpMode::Listen => run_listen(cfg, s2, st2, c2),
+            })
             .expect("thread");
         FaceStream {
             shared,
@@ -234,43 +255,7 @@ fn run(
                 sh_err.lock().unwrap().last_error = Some(l.to_string());
             }
         });
-        let mut splitter = MjpegSplitter::default();
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut window_start = Instant::now();
-        let mut window_frames = 0u32;
-        let mut got_any = false;
-        loop {
-            if stop.load(Ordering::SeqCst) {
-                break;
-            }
-            let n = match stdout.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            };
-            for jpeg in splitter.push(&buf[..n]) {
-                seq += 1;
-                window_frames += 1;
-                got_any = true;
-                let mut sh = shared.lock().unwrap();
-                let now = Instant::now();
-                sh.ring.push(
-                    now,
-                    JpegFrame {
-                        data: Arc::new(jpeg),
-                        at: now,
-                        seq,
-                    },
-                );
-                sh.status = StreamStatus::Live;
-                sh.frames += 1;
-                let el = window_start.elapsed().as_secs_f32();
-                if el >= 1.0 {
-                    sh.fps = window_frames as f32 / el;
-                    window_start = Instant::now();
-                    window_frames = 0;
-                }
-            }
-        }
+        let got_any = pump(&mut stdout, &shared, &stop, &mut seq);
         if let Some(mut c) = child_slot.lock().unwrap().take() {
             let _ = c.kill();
             let _ = c.wait();
@@ -288,6 +273,159 @@ fn run(
         }
         sleep_unless_stopped(&stop, backoff);
         backoff = (backoff * 2).min(Duration::from_secs(5));
+    }
+}
+
+/// ffmpeg の出力（MJPEG）を読んでフレームを溜める。1枚でも来たら true
+fn pump(
+    stdout: &mut impl Read,
+    shared: &Arc<Mutex<Shared>>,
+    stop: &AtomicBool,
+    seq: &mut u64,
+) -> bool {
+    let mut splitter = MjpegSplitter::default();
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut window_start = Instant::now();
+    let mut window_frames = 0u32;
+    let mut got_any = false;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let n = match stdout.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        for jpeg in splitter.push(&buf[..n]) {
+            *seq += 1;
+            window_frames += 1;
+            got_any = true;
+            let mut sh = shared.lock().unwrap();
+            let now = Instant::now();
+            sh.ring.push(
+                now,
+                JpegFrame {
+                    data: Arc::new(jpeg),
+                    at: now,
+                    seq: *seq,
+                },
+            );
+            sh.status = StreamStatus::Live;
+            sh.frames += 1;
+            let el = window_start.elapsed().as_secs_f32();
+            if el >= 1.0 {
+                sh.fps = window_frames as f32 / el;
+                window_start = Instant::now();
+                window_frames = 0;
+            }
+        }
+    }
+    got_any
+}
+
+fn set_failed(shared: &Mutex<Shared>, msg: String) {
+    let mut sh = shared.lock().unwrap();
+    sh.status = StreamStatus::Failed(msg.clone());
+    sh.last_error = Some(msg);
+}
+
+/// 待ち受け: 内蔵の受け口にキーを登録し、カメラが送ってくるたびに ffmpeg を起動して FLV を流し込む
+fn run_listen(
+    cfg: StreamConfig,
+    shared: Arc<Mutex<Shared>>,
+    stop: Arc<AtomicBool>,
+    child_slot: Arc<Mutex<Option<Child>>>,
+) {
+    use rtmp_server::{RtmpServer, parse_listen_url};
+    let Some((port, app, key)) = parse_listen_url(&cfg.url) else {
+        set_failed(
+            &shared,
+            format!(
+                "URL の形が違います（{}）。rtmp://0.0.0.0:1935/live/<キー> の形にしてください",
+                cfg.url
+            ),
+        );
+        return;
+    };
+    let mut seq = 0u64;
+    while !stop.load(Ordering::SeqCst) {
+        // ポートが使えなければ、空くまで待って開き直す
+        let server = RtmpServer::shared(port);
+        if let Some(e) = server.status().bind_error {
+            set_failed(&shared, e);
+            drop(server);
+            sleep_unless_stopped(&stop, Duration::from_secs(5));
+            continue;
+        }
+        {
+            let mut sh = shared.lock().unwrap();
+            if matches!(sh.status, StreamStatus::Failed(_)) {
+                sh.status = StreamStatus::Starting;
+                sh.last_error = None;
+            }
+        }
+        let sub = server.subscribe(&app, &key);
+        while !stop.load(Ordering::SeqCst) {
+            let session = match sub.sessions.recv_timeout(Duration::from_millis(200)) {
+                Ok(s) => s,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            };
+            let mut cmd = Command::new(&cfg.ffmpeg);
+            cmd.args(cfg.args())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    set_failed(
+                        &shared,
+                        format!("ffmpeg を起動できません（{}）: {e}", cfg.ffmpeg),
+                    );
+                    continue;
+                }
+            };
+            let mut stdin = child.stdin.take().unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            *child_slot.lock().unwrap() = Some(child);
+            // 受けた FLV を ffmpeg へ。ffmpeg が終わると書けなくなり、受け口も流すのをやめる
+            std::thread::spawn(move || {
+                use std::io::Write;
+                for chunk in session.flv {
+                    if stdin.write_all(&chunk).is_err() {
+                        break;
+                    }
+                }
+            });
+            let sh_err = shared.clone();
+            let err_thread = std::thread::spawn(move || {
+                let mut s = String::new();
+                let mut r = stderr;
+                let _ = r.read_to_string(&mut s);
+                if let Some(l) = s.lines().rev().find(|l| !l.trim().is_empty()) {
+                    sh_err.lock().unwrap().last_error = Some(l.to_string());
+                }
+            });
+            pump(&mut stdout, &shared, &stop, &mut seq);
+            if let Some(mut c) = child_slot.lock().unwrap().take() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            let _ = err_thread.join();
+            let mut sh = shared.lock().unwrap();
+            if !matches!(sh.status, StreamStatus::Failed(_)) {
+                sh.status = StreamStatus::NoSignal;
+            }
+            sh.fps = 0.0;
+        }
+        return;
     }
 }
 
@@ -381,7 +519,8 @@ mod tests {
             ffmpeg: "ffmpeg".into(),
         };
         let a = c.args();
-        assert!(a.windows(2).any(|w| w == ["-listen", "1"]));
+        assert!(a.windows(4).any(|w| w == ["-f", "flv", "-i", "pipe:0"]));
+        assert!(!a.iter().any(|x| x == "-listen"));
         assert!(a.iter().any(|x| x.contains("scale=1066:600")));
     }
 }

@@ -17,6 +17,7 @@ futures-util.workspace = true
 zune-jpeg = "0.5"
 sha2 = "0.11"
 base64 = "0.23"
+rml_rtmp = "0.8"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

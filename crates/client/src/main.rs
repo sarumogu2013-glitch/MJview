@@ -9,6 +9,7 @@
 //! 開発用: `--demo` でサーバーなしの見本の状態を表示、`--screenshot <png>` で出力を保存して終了。
 
 mod assets;
+mod cameras;
 mod config;
 mod demo;
 mod face;

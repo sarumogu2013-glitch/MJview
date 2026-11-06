@@ -207,6 +207,8 @@ pub fn take_screenshot(
             target.or_else(|| primary.single().ok())
         };
         if let Some(w) = win {
+            // 同じ名前の古いファイルがあると「保存できた」と見なしてしまうので先に消す
+            let _ = std::fs::remove_file(&task.path);
             commands
                 .spawn(Screenshot::window(w))
                 .observe(save_to_disk(task.path.clone()));

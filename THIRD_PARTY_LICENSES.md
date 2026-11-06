@@ -38,6 +38,7 @@ JanScope 本体は MIT OR Apache-2.0（[LICENSE-MIT](LICENSE-MIT) / [LICENSE-APA
 | webpki-roots | CDLA-Permissive-2.0 | 証明書の一覧（rustls が使う） |
 | zip / flate2 / zlib-rs | MIT / MIT OR Apache-2.0 / Zlib | 更新ファイルの展開 |
 | semver / sha2 | MIT OR Apache-2.0 | 版の比較、ダウンロードの確認 |
+| rml_rtmp / rml_amf0 | MIT | 顔カメラの RTMP の受け口（内蔵の配信サーバー） |
 
 配布 zip には、Rust の依存すべてのライセンス文を `licenses/rust-dependencies.html` として入れる（`cargo about generate tools/about.hbs` で作る。認めるライセンスは `about.toml` の `accepted`）。
 

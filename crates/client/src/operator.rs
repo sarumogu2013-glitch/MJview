@@ -87,6 +87,7 @@ pub struct OperatorUi {
     csv_dir: String,
     csv_msg: Option<String>,
     remove_key: Option<String>,
+    cam: crate::cameras::CameraUi,
 }
 
 impl Default for OperatorUi {
@@ -129,6 +130,7 @@ impl Default for OperatorUi {
             csv_dir: ".".into(),
             csv_msg: None,
             remove_key: None,
+            cam: Default::default(),
         }
     }
 }
@@ -214,6 +216,11 @@ pub fn operator_ui(
         }
         let id = contexts.add_image(EguiTextureHandle::Strong(tiles.back.clone()));
         ui_state.tex.insert("back".into(), id);
+        // 顔カメラのプレビュー用
+        for (i, h) in face.images.iter().enumerate() {
+            let id = contexts.add_image(EguiTextureHandle::Strong(h.clone()));
+            ui_state.tex.insert(format!("face{i}"), id);
+        }
     }
     let ctx = contexts.ctx_mut()?;
     if !ui_state.fonts_set {
@@ -1250,7 +1257,10 @@ fn face_settings_panel(
     cfg: &mut ClientConfig,
     face: &mut FaceRuntime,
 ) {
-    ui.collapsing("顔カメラ・OBS 連携・切替の設定", |ui| {
+    // JANSCOPE_OPEN_FACES で最初から開く（確認用）
+    egui::CollapsingHeader::new("顔カメラ・OBS 連携・切替の設定")
+        .default_open(std::env::var_os("JANSCOPE_OPEN_FACES").is_some())
+        .show(ui, |ui| {
         let d = u.cfg_draft.get_or_insert_with(|| cfg.clone());
         ui.label("選手画面の映像");
         ui.horizontal(|ui| {
@@ -1279,12 +1289,17 @@ fn face_settings_panel(
                             ui.selectable_value(&mut f.mode, RtmpMode::Pull, "引っ張る")
                                 .on_hover_text("配信元のサーバーの rtmp://... から受け取る");
                         });
-                    ui.add(egui::TextEdit::singleline(&mut f.url).desired_width(320.0));
+                    if f.mode == RtmpMode::Listen {
+                        ui.weak("下の「カメラの受信」で設定します");
+                    } else {
+                        ui.add(egui::TextEdit::singleline(&mut f.url).desired_width(320.0));
+                    }
                     let (t, c) = stream_status_text(face.status(SeatId(i as u8)));
                     ui.colored_label(c, t);
                     ui.end_row();
                 }
             });
+            crate::cameras::camera_section(ui, &mut u.cam, d, cfg, face, &u.tex);
             ui.horizontal(|ui| {
                 ui.label("ffmpeg");
                 ui.add(egui::TextEdit::singleline(&mut d.ffmpeg).desired_width(360.0))
