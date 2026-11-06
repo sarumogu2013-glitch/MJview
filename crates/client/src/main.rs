@@ -180,7 +180,10 @@ fn main() {
     .init_resource::<player_screen::PlayerDirty>()
     .add_systems(Startup, load_assets)
     .add_systems(PreUpdate, (theme::sync_theme, sync_tiles))
-    .add_systems(Update, windows::apply_window_ctl);
+    .add_systems(
+        Update,
+        (windows::apply_window_ctl, windows::set_window_icons),
+    );
 
     if args.demo {
         // 見本の状態を表示する。操作ウィンドウも描けるよう、つながらない宛先の接続を置いておく（状態は取り込まない）

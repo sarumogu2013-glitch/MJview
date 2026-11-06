@@ -21,3 +21,6 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 janscope-netclient.workspace = true
+
+[build-dependencies]
+winresource = "0.1"

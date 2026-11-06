@@ -952,7 +952,11 @@ static void Paint(HWND h) {
     }
     lines.push_back({L"AI で作成したソフトウェアです。本番で使う前に動作と計算結果を確かめてください", g_fontSmall, GetSysColor(COLOR_GRAYTEXT), 0});
 
-    int total = 0;
+    // 一番上にアイコン（リソースの 1 番）
+    int iconPx = s(72);
+    HICON icon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(1), IMAGE_ICON, iconPx, iconPx, 0);
+    int iconGap = icon ? s(10) : 0;
+    int total = icon ? iconPx + iconGap : 0;
     std::vector<int> hts;
     for (auto& ln : lines) {
         SelectObject(dc, ln.font);
@@ -962,6 +966,11 @@ static void Paint(HWND h) {
         total += m.bottom - m.top + ln.gapAfter;
     }
     int y = rc.top + ((rc.bottom - rc.top) - total) / 2;
+    if (icon) {
+        DrawIconEx(dc, rc.left + ((rc.right - rc.left) - iconPx) / 2, y, icon, iconPx, iconPx, 0, nullptr, DI_NORMAL);
+        DestroyIcon(icon);
+        y += iconPx + iconGap;
+    }
     for (size_t i = 0; i < lines.size(); i++) {
         SelectObject(dc, lines[i].font);
         SetTextColor(dc, lines[i].color);

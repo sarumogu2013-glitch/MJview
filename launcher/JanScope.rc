@@ -3,6 +3,9 @@
 
 1 24 "JanScope.manifest"
 
+// アイコン（tools/make_icon.py で作る）。LoadIcon(inst, 1) で使う
+1 ICON "../assets/icon/janscope.ico"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0
 PRODUCTVERSION 1,0,0,0

@@ -25,3 +25,7 @@ bevy = { version = "=0.20.1", default-features = false, features = [
 ] }
 bevy_egui = { version = "=0.43.1", default-features = false, features = ["render"] }
 resvg = "0.49"
+winit = { version = "0.30", default-features = false }
+
+[build-dependencies]
+winresource = "0.1"

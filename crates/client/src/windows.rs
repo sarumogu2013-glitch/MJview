@@ -147,6 +147,48 @@ impl WindowCtl {
     }
 }
 
+/// すべてのウィンドウ（操作・出力・選手用画面）にアイコンを付ける。ウィンドウができたら一度だけ
+pub fn set_window_icons(
+    _main_thread: bevy::ecs::system::NonSendMarker,
+    windows: Query<Entity, With<Window>>,
+    mut done: Local<std::collections::HashSet<Entity>>,
+    mut icon: Local<Option<winit::window::Icon>>,
+) {
+    if icon.is_none() {
+        let png = include_bytes!("../../../assets/icon/janscope-256.png");
+        let Ok(img) = image_from_png(png) else { return };
+        *icon = winit::window::Icon::from_rgba(img.2, img.0, img.1).ok();
+    }
+    let Some(icon) = icon.as_ref() else { return };
+    bevy::winit::WINIT_WINDOWS.with_borrow(|ww| {
+        for e in &windows {
+            if done.contains(&e) {
+                continue;
+            }
+            if let Some(w) = ww.get_window(e) {
+                w.set_window_icon(Some(icon.clone()));
+                done.insert(e);
+            }
+        }
+    });
+}
+
+/// PNG → (幅, 高さ, RGBA)
+fn image_from_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>), ()> {
+    let img = bevy::image::Image::from_buffer(
+        png,
+        bevy::image::ImageType::Extension("png"),
+        bevy::image::CompressedImageFormats::NONE,
+        true,
+        bevy::image::ImageSampler::Default,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .map_err(|_| ())?;
+    let (w, h) = (img.width(), img.height());
+    let data = img.data.ok_or(())?;
+    Ok((w, h, data))
+}
+
 /// 要求どおりにウィンドウを切り替え、様子を書き戻す。F11 で操作ウィンドウ（選手用画面ではその画面）の全画面を切り替える
 pub fn apply_window_ctl(
     ui: Option<ResMut<crate::operator::OperatorUi>>,
