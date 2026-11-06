@@ -44,6 +44,9 @@ jobs:
         run: cargo test --workspace --release
       - name: ビルド
         run: cargo build --release -p janscope-server -p janscope-client
+      - name: ランチャー（JanScope.exe、C++）
+        shell: cmd
+        run: launcher\build.bat %TAG:v=%
       - name: 依存のライセンス一覧
         uses: taiki-e/install-action@v2
         with:

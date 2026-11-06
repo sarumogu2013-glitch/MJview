@@ -1,0 +1,27 @@
+// JanScope ランチャーのリソース（マニフェスト＝見た目の新しいコントロールと高 DPI 対応、版の情報）
+#include <winresrc.h>
+
+1 24 "JanScope.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "041104B0"
+    BEGIN
+      VALUE "CompanyName", "JanScope"
+      VALUE "FileDescription", "JanScope ランチャー"
+      VALUE "ProductName", "JanScope"
+      VALUE "LegalCopyright", "MIT OR Apache-2.0"
+      VALUE "OriginalFilename", "JanScope.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x411, 1200
+  END
+END

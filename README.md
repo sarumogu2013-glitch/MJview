@@ -43,11 +43,21 @@
 | `crates/server/` | 処理サーバー `janscope-server`（ノートPC） |
 | `crates/netclient/` | クライアント側の接続（自動再接続・時刻合わせ） |
 | `crates/client/` | 配信クライアント `janscope-client`（出力・操作・選手用画面） |
+| `launcher/` | ランチャー `JanScope.exe`（C++・Win32）。サーバー・クライアントを1か所から起動、更新、バージョン情報 |
 | `crates/update/` | 自動アップデート（GitHub Releases の確認・取得・入れ替え） |
 | `assets/fonts/` | Noto Sans JP（OFL） |
 | `tools/` | 開発用スクリプト（点数計算の突き合わせケース生成、配布 zip の作成） |
 | `.github/workflows/` | CI（テスト・Windows ビルド）とリリース |
 | `training/` | 牌認識の学習・評価ツール（Python。配布物には含めない）。使い方は [training/README.md](training/README.md) |
+
+## ランチャー（JanScope.exe）
+
+配布フォルダの `JanScope.exe` をダブルクリックすると、ツールバーのボタンから「サーバー」「配信クライアント」「入力担当」「選手用画面」「画面の確認」を起動できます。
+
+- 「ファイル → 接続の設定」に、サーバーのアドレス・ポート・接続コード・選手用画面のモニターを入れておく（`JanScope.ini` に保存。更新で消えない）
+- このPCでサーバーを起動すると、設定の接続コードで起動するので、クライアント側でコードを打たなくてよい（コードがなければ自動で作る）
+- 「更新」メニューで新しい版を確かめて入れ替えられる（中身は `janscope-server --update`。起動中のものがあるときは入れ替えない）
+- ビルド: `launcher\build.bat`（Visual Studio の C++）
 
 ## 動かし方（開発中）
 

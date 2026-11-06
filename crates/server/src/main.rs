@@ -31,6 +31,30 @@ fn print_update_check() -> bool {
     }
 }
 
+/// 新しい版の情報を1行の JSON で出す（ランチャー JanScope.exe が読む）
+fn print_update_info() {
+    let mut v = serde_json::json!({ "current": VERSION });
+    match janscope_update::Updater::github().check(VERSION) {
+        Ok(janscope_update::Check::Available(r)) => {
+            v["available"] = true.into();
+            v["latest"] = r.version.to_string().into();
+            v["notes"] = r.notes.into();
+            v["url"] = r.page_url.into();
+            v["has_file"] = r.zip.is_some().into();
+        }
+        Ok(janscope_update::Check::UpToDate { latest }) => {
+            v["available"] = false.into();
+            v["latest"] = latest.to_string().into();
+        }
+        Err(e) => {
+            v["available"] = false.into();
+            v["error"] = e.to_string().into();
+        }
+    }
+    v["dist"] = janscope_update::is_dist_install().into();
+    println!("{v}");
+}
+
 /// 新しい版を取ってきて入れ替える
 fn run_update() -> i32 {
     let Some(dir) = janscope_update::install_dir() else {
@@ -82,7 +106,8 @@ fn usage() -> ! {
          \x20 --resume-latest    いちばん新しいログから続きを再開\n\
          \x20 --no-update-check  起動時に新しい版を確かめない\n\
          \x20 --check-update     新しい版があるか確かめて終わる\n\
-         \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\n\
+         \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\
+         \x20 --update-info      新しい版の情報を JSON で出して終わる（ランチャー用）\n\n\
          ソース: {REPO_URL}（MIT OR Apache-2.0。同梱物のライセンスは THIRD_PARTY_LICENSES.md）"
     );
     std::process::exit(2)
@@ -120,6 +145,10 @@ async fn main() {
                 return;
             }
             "--update" => std::process::exit(run_update()),
+            "--update-info" => {
+                print_update_info();
+                return;
+            }
             _ => usage(),
         }
     }

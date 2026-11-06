@@ -1,0 +1,5 @@
+*.o
+*.obj
+*.res
+JanScope.exe
+JanScope.ini

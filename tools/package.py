@@ -22,6 +22,8 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BINS = ["janscope-server", "janscope-client"]
+# Windows ではランチャー（launcher/build.bat で作る JanScope.exe）も入れる
+LAUNCHER = ROOT / "launcher" / "JanScope.exe"
 
 FFMPEG_README = """顔カメラ（RTMP）の取り込みには FFmpeg が必要です。
 
@@ -40,6 +42,10 @@ START_TXT = """JanScope {version}
 大会など本番で使う前に、必ず実際の環境で動作と計算結果を確かめてください。
 
 ■ 起動
+  JanScope.exe をダブルクリックすると、ツールバーのボタンから全部起動できます。
+  （「ファイル → 接続の設定」でサーバーのアドレスと接続コードを入れておく。このPCでサーバーを起動すると、コードは自動で作ります）
+
+  コマンドで起動する場合:
   サーバー（卓のノートPC）     : janscope-server.exe            （接続コードが表示されます）
   配信クライアント（配信用PC）  : janscope-client.exe --server <サーバーのIP>:47800 --code <接続コード>
   選手用画面                  : janscope-client.exe --server <IP>:47800 --code <接続コード> --role player --fullscreen --monitor 1
@@ -93,6 +99,10 @@ def build(bin_dir: pathlib.Path, suffix: str, out: pathlib.Path, rust_licenses: 
         if not src.is_file():
             sys.exit(f"{src} がありません（cargo build --release を先に）")
         shutil.copy2(src, stage / src.name)
+    if exe:
+        if not LAUNCHER.is_file():
+            sys.exit(f"{LAUNCHER} がありません（launcher/build.bat を先に）")
+        shutil.copy2(LAUNCHER, stage / "JanScope.exe")
     shutil.copytree(ROOT / "assets", stage / "assets")
     for f in ["LICENSE-MIT", "LICENSE-APACHE", "THIRD_PARTY_LICENSES.md", "README.md"]:
         shutil.copy2(ROOT / f, stage / f)
