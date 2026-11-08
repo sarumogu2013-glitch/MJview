@@ -45,6 +45,8 @@ pub enum Error {
     NotDist(String),
     #[error("ファイルの操作に失敗しました: {0}")]
     Io(#[from] std::io::Error),
+    #[error("ファイルを入れ替えられません: {0}")]
+    File(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -414,6 +416,48 @@ fn old_name(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// どのファイルで失敗したかを入れたエラー
+fn file_err(p: &Path, what: &str, e: std::io::Error) -> Error {
+    let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
+        "（そのファイルを使っているソフトを閉じてから、もう一度試してください）"
+    } else {
+        ""
+    };
+    Error::File(format!("{}の{what}: {e}{hint}", p.display()))
+}
+
+/// 前回の更新で残った `.old` を片付ける。まだ動いている exe（前回の更新のあと起動し直していないランチャーなど）は
+/// 消せないので、別の名前（`.old.1` …）に改名してどける。動いている exe でも改名はできる
+fn set_aside(old: &Path) -> Result<()> {
+    if fs::remove_file(old).is_ok() {
+        return Ok(());
+    }
+    for i in 1..1000 {
+        let mut s = old.as_os_str().to_owned();
+        s.push(format!(".{i}"));
+        let to = PathBuf::from(s);
+        if to.exists() {
+            if fs::remove_file(&to).is_err() {
+                continue;
+            }
+        }
+        return fs::rename(old, &to).map_err(|e| file_err(old, "片付け", e));
+    }
+    Err(Error::File(format!("{} を片付けられません", old.display())))
+}
+
+/// `.old` か `.old.<数字>`（更新で残ったもの）
+fn is_leftover(p: &Path) -> bool {
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.ends_with(".old") {
+        return true;
+    }
+    match name.rsplit_once(".old.") {
+        Some((_, n)) => !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
 fn require_dist(install: &Path) -> Result<()> {
     if install.join(DIST_MARKER).is_file() {
         Ok(())
@@ -441,15 +485,15 @@ pub fn apply(staged: &Staged, install: &Path) -> Result<Applied> {
             if existed {
                 let old = old_name(&dst);
                 if old.exists() {
-                    fs::remove_file(&old)?;
+                    set_aside(&old)?;
                 }
-                fs::rename(&dst, &old)?;
+                fs::rename(&dst, &old).map_err(|e| file_err(&dst, "改名", e))?;
             }
             if let Err(e) = fs::rename(&src, &dst).or_else(|_| fs::copy(&src, &dst).map(|_| ())) {
                 if existed {
                     let _ = fs::rename(old_name(&dst), &dst);
                 }
-                return Err(e.into());
+                return Err(file_err(&dst, "置き換え", e));
             }
             done.push((dst, existed));
             if existed {
@@ -481,7 +525,7 @@ pub fn cleanup_old(install: &Path) -> usize {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, n);
-            } else if p.extension().is_some_and(|x| x == "old") && fs::remove_file(&p).is_ok() {
+            } else if is_leftover(&p) && fs::remove_file(&p).is_ok() {
                 *n += 1;
             }
         }
@@ -550,6 +594,14 @@ mod tests {
         assert!(r.checksum.is_none());
         let pre = j.replace("\"prerelease\":false", "\"prerelease\":true");
         assert!(parse_release(&pre, "windows-x64.zip").unwrap().is_none());
+    }
+
+    #[test]
+    fn leftovers() {
+        assert!(is_leftover(Path::new("a/JanScope.exe.old")));
+        assert!(is_leftover(Path::new("JanScope.exe.old.3")));
+        assert!(!is_leftover(Path::new("JanScope.exe")));
+        assert!(!is_leftover(Path::new("x.old.txt")));
     }
 
     #[test]

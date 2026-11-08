@@ -76,6 +76,18 @@ fn replaces_running_executable() {
     // 古い exe はまだ動いている
     assert!(child.try_wait().unwrap().is_none());
 
+    // 起動し直さないまま、もう一度更新する（動いている exe が .old になっていて消せない場合）
+    let staged_root2 = tmpdir("staged2");
+    std::fs::write(staged_root2.join(DIST_MARKER), "0.3.0\n").unwrap();
+    std::fs::write(staged_root2.join(exe), b"newer executable").unwrap();
+    let staged2 = Staged {
+        root: staged_root2.clone(),
+        files: vec![PathBuf::from(DIST_MARKER), PathBuf::from(exe)],
+    };
+    apply(&staged2, &inst).expect("2回続けての更新で失敗した");
+    assert_eq!(std::fs::read(inst.join(exe)).unwrap(), b"newer executable");
+    assert!(child.try_wait().unwrap().is_none());
+
     // 動いている間は、Windows では .old の exe を消せないことがある（消せなくても失敗ではない）
     let n_running = cleanup_old(&inst);
     eprintln!("動いている間に消せた .old: {n_running}");
