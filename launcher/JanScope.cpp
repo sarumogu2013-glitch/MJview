@@ -215,6 +215,7 @@ struct Child {
     HWND embedded = nullptr;  // メインウィンドウに埋め込んだ操作ウィンドウ
     bool waitEmbed = false;   // 埋め込む操作ウィンドウが出るのを待っている
     ULONGLONG waitUntil = 0;
+    bool demo = false;  // サーバー: デモモード（ダミー履歴）で動いている
 };
 
 static HINSTANCE g_inst;
@@ -615,8 +616,10 @@ static HWND OutputWindow() {
 static std::wstring CommandFile() { return InDir(L"data\\client-command.txt"); }
 
 /// ボタンが「動いている」状態か（配信画面は、入力担当の配信画面が開いているか）
+static bool DemoOn();
 static bool IsOn(UINT fn) {
     if (fn == ID_LOG) return g_logVisible;
+    if (fn == ID_DEMO) return DemoOn();
     return fn == ID_BROADCAST ? OutputWindow() != nullptr : Running(fn) != nullptr;
 }
 
@@ -712,7 +715,7 @@ static void StartServer(bool resume, bool dummy = false, const std::wstring& dum
         SendMessageW(g_log, EM_SETSEL, len, len);
         SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)head);
     }
-    Launch(ID_SERVER, title, L"janscope-server.exe", args, true, true);
+    if (Child* c = Launch(ID_SERVER, title, L"janscope-server.exe", args, true, true)) c->demo = dummy;
     RelayoutLog();
 }
 
@@ -751,8 +754,57 @@ static void StartClient(UINT fn, const std::wstring& dummyFile = L"", bool withO
     }
 }
 
+// ---- デモモード ----
+// デモモードは「本番の入力担当・配信画面が、ダミー履歴のサーバーを読んでいる」状態。
+// 切り替えるのはサーバーだけ（同じポート・接続コードで起動し直す）。入力担当は自動でつなぎ直すので、起動し直さない
+
+static bool DemoOn() {
+    Child* c = Running(ID_SERVER);
+    return c && c->demo;
+}
+
+/// サーバーを止めて、少し待つ（同じポートで起動し直すため）
+static void StopServerForSwitch() {
+    if (Child* c = Running(ID_SERVER)) {
+        TerminateProcess(c->process, 0);
+        WaitForSingleObject(c->process, 3000);
+        Sleep(300);
+        RefreshChildren();
+    }
+}
+
+/// デモモードにする（dummyFile が空なら組み込みのダミー履歴）。入力担当がなければ、配信画面つきで起動する
+static void EnterDemo(const std::wstring& dummyFile) {
+    if (Running(ID_SERVER) && !DemoOn()) {
+        if (MessageBoxW(g_main,
+                        L"デモモードにします。\nサーバーをダミー履歴で起動し直します（本番の対局ログはそのまま残り、実戦モードに戻すと続きから再開します）。\n入力担当・配信画面は起動し直しません。\n\n配信中・対局中は切り替えないでください。切り替えますか？",
+                        L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+            return;
+    }
+    StopServerForSwitch();
+    StartServer(false, dummyFile.empty(), dummyFile);
+    if (!Running(ID_INPUT)) StartClient(ID_INPUT, L"", true);
+    SetStatus(1, L"デモモード: 入力担当・配信画面は、ダミー履歴のサーバーを読んでいます");
+}
+
+/// 実戦モードに戻す（本番のサーバーを、いちばん新しい対局ログから再開する）
+static void LeaveDemo() {
+    if (MessageBoxW(g_main, L"実戦モードに戻します。\nサーバーを本番のモードで起動し直します（いちばん新しい対局ログがあれば続きから）。\n入力担当・配信画面は起動し直しません。\n\n戻しますか？", L"JanScope",
+                    MB_YESNO | MB_ICONQUESTION) != IDYES)
+        return;
+    StopServerForSwitch();
+    StartServer(true);
+    SetStatus(1, L"実戦モード: 本番のサーバーにつないでいます");
+}
+
 /// ボタン: 動いていなければ起動、動いていれば終了（サーバーと配信クライアントは確認する）
 static void Toggle(UINT fn) {
+    if (fn == ID_DEMO) {
+        if (DemoOn()) LeaveDemo();
+        else EnterDemo(L"");
+        UpdateToggleButtons();
+        return;
+    }
     if (fn == ID_BROADCAST) {
         // 配信画面: 入力担当の中の出力ウィンドウを開く・閉じる（入力担当がなければ、配信画面つきで起動する）
         if (HWND w = OutputWindow()) {
@@ -1106,13 +1158,11 @@ static HMENU BuildMenu() {
     AppendMenuW(run, MF_STRING, ID_PLAYER, L"選手用画面(&P)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
     HMENU review = CreatePopupMenu();
-    AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（入力担当・配信画面＋中のダミーサーバー）(&D)");
-    AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY, L"サーバー（ダミー対局データ）(&S)");
+    AppendMenuW(review, MF_STRING, ID_DEMO, L"デモモード（ダミー履歴を読む。もう一度選ぶと実戦モード）(&D)");
     AppendMenuW(review, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(review, MF_STRING, ID_MAJSOUL, L"雀魂の牌譜を取り込む(&M)...");
     AppendMenuW(review, MF_STRING, ID_MAJSOUL_URL, L"牌譜の URL を開いて取り込む(&U)...");
-    AppendMenuW(review, MF_STRING, ID_DUMMY_FILE, L"取り込んだ対局で確認(&F)...");
-    AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY_FILE, L"サーバー（取り込んだ対局）(&G)...");
+    AppendMenuW(review, MF_STRING, ID_DUMMY_FILE, L"取り込んだ対局でデモモード(&F)...");
     AppendMenuW(run, MF_POPUP, (UINT_PTR)review, L"機能の確認用(&T)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(run, MF_STRING, ID_STOP_ALL, L"起動したものをすべて閉じる(&C)");
@@ -1120,7 +1170,6 @@ static HMENU BuildMenu() {
 
     HMENU view = CreatePopupMenu();
     AppendMenuW(view, MF_STRING, ID_VIEW_INPUT, L"入力担当の操作画面(&I)");
-    AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"ダミーで確認(&D)");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(view, MF_STRING, ID_LOG, L"サーバーログ(&L)");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
@@ -1153,7 +1202,7 @@ static void UpdateMenuState() {
     // 起動メニュー: 動いているものに印（選ぶと終了）
     for (UINT fn : kToggles) CheckMenuItem(m, fn, MF_BYCOMMAND | (IsOn(fn) ? MF_CHECKED : MF_UNCHECKED));
     // 表示メニュー: 埋め込んでいるものだけ選べる。見せているものに印
-    const UINT views[][2] = {{ID_VIEW_INPUT, ID_INPUT}, {ID_VIEW_DEMO, ID_DEMO}};
+    const UINT views[][2] = {{ID_VIEW_INPUT, ID_INPUT}};
     for (auto& v : views) {
         Child* c = Running(v[1]);
         bool ok = c && c->embedded && IsWindow(c->embedded);
@@ -1174,7 +1223,7 @@ static const TbItem kToolbar[] = {
     {ID_BROADCAST, L"配信画面", L"配信画面（OBS で取り込む出力ウィンドウ）。入力担当の画面を写す。閉じても入力担当から開き直せる"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
     {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（牌譜の URL を貼るか、Chrome でログインして牌譜を開く）"},
-    {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした入力担当と配信画面（サーバー・接続コードは不要）"},
+    {ID_DEMO, L"デモモード", L"本番の入力担当・配信画面のまま、サーバーをダミー履歴にします（入力担当は起動し直しません）。もう一度押すと実戦モードに戻ります"},
     {0, nullptr, nullptr},
     {ID_LOG, L"サーバーログ", L"サーバーのログ（接続コードなど）の表示・非表示。操作画面があるときは下側に出ます"},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
@@ -1391,29 +1440,16 @@ static void OnCommand(UINT id) {
             UpdateToggleButtons();
             RelayoutLog();
             break;
-        case ID_DUMMY_FILE: {
-            if (Running(ID_DEMO)) {
-                Error(L"ダミーで確認しているクライアントが動いています。いったん終了してください。");
-                break;
-            }
-            std::wstring f = PickDummyFile();
-            if (!f.empty()) StartClient(ID_DEMO, f);
-            UpdateToggleButtons();
-            break;
-        }
+        case ID_DUMMY_FILE:
         case ID_SERVER_DUMMY_FILE: {
-            if (Running(ID_SERVER)) {
-                Error(L"サーバーはもう動いています。いったん終了してください。");
-                break;
-            }
+            // 取り込んだ対局でデモモード（入力担当は起動し直さない）
             std::wstring f = PickDummyFile();
-            if (!f.empty()) StartServer(false, false, f);
+            if (!f.empty()) EnterDemo(f);
             UpdateToggleButtons();
             break;
         }
         case ID_SERVER_DUMMY:
-            if (Running(ID_SERVER)) Error(L"サーバーはもう動いています。ダミーで起動するには、いったん終了してください。");
-            else StartServer(false, true);
+            EnterDemo(L"");
             UpdateToggleButtons();
             break;
         case ID_SERVER_RESUME:
@@ -1423,7 +1459,6 @@ static void OnCommand(UINT id) {
             break;
         case ID_VIEW_BROADCAST: ViewEmbedded(ID_BROADCAST); break;
         case ID_VIEW_INPUT: ViewEmbedded(ID_INPUT); break;
-        case ID_VIEW_DEMO: ViewEmbedded(ID_DEMO); break;
         case ID_VIEW_INFO: ShowEmbedded(nullptr); break;
         case ID_STOP_ALL: StopAll(); break;
         case ID_SETTINGS: ShowSettings(); break;

@@ -21,6 +21,9 @@ pub struct FullView {
     /// 今の局の操作（局の開始のあとから。入力担当が遡って直すのに使う）
     #[serde(default)]
     pub hand_log: Vec<crate::state::Action>,
+    /// サーバーがデモモード（ダミー履歴）で動いている
+    #[serde(default)]
+    pub demo: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

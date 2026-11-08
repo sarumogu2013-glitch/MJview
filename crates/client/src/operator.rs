@@ -365,6 +365,13 @@ pub fn operator_ui(
             };
             ui.separator();
             ui.label(format!("ロール: {}", role.0.name_ja()));
+            if table.full.as_ref().is_some_and(|f| f.demo) {
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 200, 80),
+                    egui::RichText::new("■ デモモード（ダミー履歴）").strong(),
+                )
+                .on_hover_text("サーバーがダミー履歴で動いています。ランチャーの「デモモード」をもう一度押すと実戦モードに戻ります");
+            }
             if let Some(by) = table.last_by.filter(|b| *b != role.0) {
                 ui.colored_label(
                     egui::Color32::LIGHT_BLUE,

@@ -69,6 +69,8 @@ struct Shared {
     seq: u64,
     tournament: janscope_core::tournament::Tournament,
     tournament_path: PathBuf,
+    /// デモモード（ダミー履歴で動いている）
+    demo: bool,
 }
 
 pub struct Server {
@@ -101,6 +103,7 @@ fn full_view(sh: &Shared) -> FullView {
         can_redo: sh.log.can_redo(),
         tournament: sh.tournament.clone(),
         hand_log: hand_log(sh.log.actions()),
+        demo: sh.demo,
     }
 }
 
@@ -204,6 +207,7 @@ pub async fn start(cfg: ServerConfig) -> std::io::Result<Running> {
                 seq: 0,
                 tournament,
                 tournament_path,
+                demo: cfg.dummy.is_some(),
             };
             sh.sync_tournament();
             sh

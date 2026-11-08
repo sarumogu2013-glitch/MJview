@@ -167,6 +167,7 @@ pub fn install(
         can_redo: false,
         tournament: demo_tournament(&kind),
         hand_log: vec![],
+        demo: false,
     });
     program.full = table.full.clone();
     program.seq = 1;
