@@ -21,7 +21,7 @@ import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BINS = ["janscope-server", "janscope-client", "janscope-majsoul"]
+BINS = ["janscope-server", "janscope-client", "janscope-majsoul", "janscope-media"]
 # Windows ではランチャー（launcher/build.bat で作る JanScope.exe）も入れる
 LAUNCHER = ROOT / "launcher" / "JanScope.exe"
 

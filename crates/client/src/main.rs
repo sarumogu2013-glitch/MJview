@@ -20,6 +20,7 @@ mod player_screen;
 mod prefs;
 mod program;
 mod replay;
+mod sandbox;
 mod scenes;
 mod settings;
 mod settings_prefs;
@@ -275,10 +276,16 @@ fn main() {
         .add_systems(Update, windows::read_command_file);
         app.insert_resource(settings::Library::load())
             .init_resource::<settings::SettingsUi>()
+            .init_resource::<sandbox::SandboxUi>()
             .add_systems(Startup, update::startup_check)
             .add_systems(
                 EguiPrimaryContextPass,
-                (operator::operator_ui, settings::settings_ui).chain(),
+                (
+                    operator::operator_ui,
+                    settings::settings_ui,
+                    sandbox::sandbox_ui,
+                )
+                    .chain(),
             );
     }
     if let Some(path) = args.screenshot.clone() {

@@ -1,0 +1,13 @@
+[package]
+name = "janscope-media"
+description = "JanScope メディアサーバー: カメラ（RTMP・Webカメラ）・画像・映像を受けて、映像サンドボックスの枠で切り出して入力担当に渡す"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+janscope-video.workspace = true
+serde.workspace = true
+serde_json.workspace = true

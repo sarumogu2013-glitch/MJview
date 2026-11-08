@@ -75,7 +75,8 @@ enum : UINT {
     ID_VIEW_BROADCAST,
     ID_VIEW_INPUT,
     ID_VIEW_DEMO,
-    ID_LOG,  // サーバーログの表示・非表示
+    ID_LOG,    // サーバーログの表示・非表示
+    ID_MEDIA,  // メディアサーバー（janscope-media.exe）
 };
 
 enum : UINT {
@@ -259,18 +260,28 @@ static Child* Running(UINT fn) {
 }
 
 /// 子の出力を読んで、メインウィンドウのサーバーログに送る（別スレッド）
-static void ReadOutput(HANDLE rd, HWND hwnd) {
+static void ReadOutput(HANDLE rd, HWND hwnd, std::string prefix, std::string endMsg) {
     char buf[4096];
     DWORD n = 0;
-    while (ReadFile(rd, buf, sizeof(buf), &n, nullptr) && n > 0) PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string(buf, n));
+    bool lineStart = true;
+    while (ReadFile(rd, buf, sizeof(buf), &n, nullptr) && n > 0) {
+        // 行の頭に「[メディア]」などを付ける（サーバーとメディアサーバーのログを同じ欄に出すため）
+        std::string out;
+        for (DWORD i = 0; i < n; i++) {
+            if (lineStart && !prefix.empty()) out += prefix;
+            out += buf[i];
+            lineStart = buf[i] == '\n';
+        }
+        PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string(out));
+    }
     CloseHandle(rd);
-    PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string("\n（サーバーが終了しました）\n"));
+    PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string("\n" + endMsg + "\n"));
 }
 
 /// exe を起動する。console=true ならコンソール（接続コードなどが見える窓）を出す。
 /// capture=true なら出力をメインウィンドウのサーバーログに出す（窓は出さない）
 static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console,
-                     bool capture = false) {
+                     bool capture = false, const std::string& prefix = "") {
     std::wstring path = InDir(exe);
     if (!Exists(path)) {
         Error(exe + L" が見つかりません。\nJanScope.exe と同じフォルダに置いてください。\n\n" + path);
@@ -307,7 +318,8 @@ static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe
     if (capture) {
         CloseHandle(wr);
         HWND hwnd = g_main;
-        std::thread([rd, hwnd] { ReadOutput(rd, hwnd); }).detach();
+        std::string endMsg = prefix + "（" + std::string(fn == ID_MEDIA ? "メディアサーバー" : "サーバー") + "が終了しました）";
+        std::thread([rd, hwnd, prefix, endMsg] { ReadOutput(rd, hwnd, prefix, endMsg); }).detach();
     }
     Child c;
     c.name = title;
@@ -468,7 +480,7 @@ static void OnEmbedTimer() {
 }
 
 // ---- ボタンの押された状態 ----
-static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO, ID_MAJSOUL, ID_LOG};
+static const UINT kToggles[] = {ID_MEDIA, ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO, ID_MAJSOUL, ID_LOG};
 
 /// 取り込んだ対局（data\majsoul の JSON）を選ぶ。やめたら空
 static std::wstring PickDummyFile() {
@@ -715,7 +727,7 @@ static void StartServer(bool resume, bool dummy = false, const std::wstring& dum
         SendMessageW(g_log, EM_SETSEL, len, len);
         SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)head);
     }
-    if (Child* c = Launch(ID_SERVER, title, L"janscope-server.exe", args, true, true)) c->demo = dummy;
+    if (Child* c = Launch(ID_SERVER, title, L"janscope-server.exe", args, true, true, "[サーバー] ")) c->demo = dummy;
     RelayoutLog();
 }
 
@@ -752,6 +764,16 @@ static void StartClient(UINT fn, const std::wstring& dummyFile = L"", bool withO
         SetTimer(g_main, TIMER_EMBED, 100, nullptr);
         SetStatus(1, title + L" の操作画面を開いています…");
     }
+}
+
+/// メディアサーバー: カメラ（RTMP・Webカメラ）・画像・映像を受けて、映像サンドボックスの枠で切り出し、入力担当に渡す。
+/// ログはサーバーログの欄に「[メディア]」を付けて出す。入力担当・サーバーを起動し直してもカメラは切れない
+static void StartMedia() {
+    CreateDirectoryW(InDir(L"data").c_str(), nullptr);
+    g_logUsed = true;
+    std::wstring args = L"--data \"" + InDir(L"data") + L"\"";
+    Launch(ID_MEDIA, L"メディアサーバー", L"janscope-media.exe", args, true, true, "[メディア] ");
+    RelayoutLog();
 }
 
 // ---- デモモード ----
@@ -829,8 +851,11 @@ static void Toggle(UINT fn) {
         return;
     }
     if (Child* c = Running(fn)) {
-        if (fn == ID_SERVER || fn == ID_INPUT) {
-            std::wstring q = c->name + (fn == ID_INPUT ? L" を終了しますか？（配信画面も閉じます）" : L" を終了しますか？") +
+        if (fn == ID_SERVER || fn == ID_INPUT || fn == ID_MEDIA) {
+            std::wstring q = c->name +
+                             (fn == ID_INPUT   ? L" を終了しますか？（配信画面も閉じます）"
+                              : fn == ID_MEDIA ? L" を終了しますか？（カメラの映像が止まります）"
+                                               : L" を終了しますか？") +
                              L"\n配信中・対局中は終了しないでください。";
             if (MessageBoxW(g_main, q.c_str(), L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
                 UpdateToggleButtons();
@@ -841,6 +866,7 @@ static void Toggle(UINT fn) {
         return;
     }
     if (fn == ID_SERVER) StartServer(false);
+    else if (fn == ID_MEDIA) StartMedia();
     else if (fn == ID_MAJSOUL) {
         // 雀魂の牌譜の取り込み: 先に牌譜の URL を聞く（空欄なら雀魂のトップを開いて、一覧から選ぶ）
         std::wstring url;
@@ -1150,6 +1176,7 @@ static HMENU BuildMenu() {
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)file, L"ファイル(&F)");
 
     HMENU run = CreatePopupMenu();
+    AppendMenuW(run, MF_STRING, ID_MEDIA, L"メディアサーバー（カメラ・映像の受け口）(&M)");
     AppendMenuW(run, MF_STRING, ID_SERVER, L"サーバー(&S)");
     AppendMenuW(run, MF_STRING, ID_SERVER_RESUME, L"サーバー（いちばん新しいログから再開）(&R)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
@@ -1218,7 +1245,8 @@ struct TbItem {
     const wchar_t* tip;
 };
 static const TbItem kToolbar[] = {
-    {ID_SERVER, L"サーバー", L"処理サーバーを起動します（接続コードは設定のもの）"},
+    {ID_MEDIA, L"メディアサーバー", L"カメラ（RTMP・Webカメラ）・画像・映像を受けて、映像サンドボックスの枠で切り出します。入力担当・サーバーを起動し直してもカメラは切れません"},
+    {ID_SERVER, L"サーバー", L"処理サーバー（牌データ）を起動します（接続コードは設定のもの）"},
     {ID_INPUT, L"入力担当", L"入力担当の操作画面（配信のメイン。手牌・河・点数・シーンなどをここで操作する）"},
     {ID_BROADCAST, L"配信画面", L"配信画面（OBS で取り込む出力ウィンドウ）。入力担当の画面を写す。閉じても入力担当から開き直せる"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
@@ -1432,7 +1460,8 @@ static void OnCommand(UINT id) {
         case ID_INPUT:
         case ID_PLAYER:
         case ID_DEMO:
-        case ID_MAJSOUL: Toggle(id); break;
+        case ID_MAJSOUL:
+        case ID_MEDIA: Toggle(id); break;
         case ID_MAJSOUL_URL: OpenMajsoulUrl(); break;
         case ID_LOG:
             g_logVisible = !g_logVisible;

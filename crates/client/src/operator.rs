@@ -213,6 +213,7 @@ pub fn operator_ui(
     mut settings: ResMut<crate::settings::SettingsUi>,
     lib: Res<crate::settings::Library>,
     mut replay: ResMut<crate::replay::Replay>,
+    mut sandbox: ResMut<crate::sandbox::SandboxUi>,
 ) -> Result {
     let Some(tiles) = tiles else { return Ok(()) };
     if tiles.is_changed() {
@@ -421,6 +422,13 @@ pub fn operator_ui(
             }
             if ui.button("設定").clicked() {
                 settings.open = !settings.open;
+            }
+            if ui
+                .button("映像サンドボックス")
+                .on_hover_text("メディアサーバーに届いた映像を並べて、選手顔・手牌確認・河/鳴き確認の枠を置きます")
+                .clicked()
+            {
+                sandbox.open = !sandbox.open;
             }
             ui.separator();
             u.windows.toolbar(ui);
@@ -1491,15 +1499,28 @@ fn face_settings_panel(
                     let f = &mut d.faces[i];
                     ui.label(SeatId(i as u8).label().to_string());
                     ui.checkbox(&mut f.enabled, "");
+                    let label = match f.mode {
+                        RtmpMode::Listen => "待ち受け",
+                        RtmpMode::Pull => "引っ張る",
+                        RtmpMode::Media => "メディアサーバー",
+                    };
+                    let before = f.mode;
                     egui::ComboBox::from_id_salt(format!("rtmp_mode{i}"))
-                        .selected_text(if f.mode == RtmpMode::Listen { "待ち受け" } else { "引っ張る" })
+                        .selected_text(label)
                         .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut f.mode, RtmpMode::Media, "メディアサーバー")
+                                .on_hover_text("メディアサーバーが映像サンドボックスの「選手顔」の枠で切り出した映像を受ける（おすすめ。入力担当を起動し直してもカメラは切れない）");
                             ui.selectable_value(&mut f.mode, RtmpMode::Listen, "待ち受け")
                                 .on_hover_text("配信元から rtmp://このPCのIP:1935/live/... に送ってもらう");
                             ui.selectable_value(&mut f.mode, RtmpMode::Pull, "引っ張る")
                                 .on_hover_text("配信元のサーバーの rtmp://... から受け取る");
                         });
-                    if f.mode == RtmpMode::Listen {
+                    if f.mode == RtmpMode::Media && before != RtmpMode::Media {
+                        f.url = crate::sandbox::face_url(&d.media_url, i as u8);
+                    }
+                    if f.mode == RtmpMode::Media {
+                        ui.weak("映像サンドボックスの「選手顔」の枠");
+                    } else if f.mode == RtmpMode::Listen {
                         ui.weak("下の「カメラの受信」で設定します");
                     } else {
                         ui.add(egui::TextEdit::singleline(&mut f.url).desired_width(320.0));

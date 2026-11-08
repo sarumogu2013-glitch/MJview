@@ -54,6 +54,8 @@ pub struct ClientConfig {
     pub sync_offset_ms: [i32; 4],
     /// 見た目・演出・操作の設定
     pub prefs: crate::prefs::Prefs,
+    /// メディアサーバーの場所（映像サンドボックス・顔カメラの「メディアサーバー」）
+    pub media_url: String,
 }
 
 impl Default for ClientConfig {
@@ -72,6 +74,7 @@ impl Default for ClientConfig {
             delay_secs: 0.0,
             sync_offset_ms: [0; 4],
             prefs: crate::prefs::Prefs::default(),
+            media_url: janscope_video::sandbox::DEFAULT_MEDIA_URL.into(),
         }
     }
 }

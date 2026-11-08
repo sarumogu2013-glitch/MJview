@@ -14,8 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+pub mod http;
 pub mod obs;
 pub mod rtmp_server;
+pub mod sandbox;
 
 use janscope_core::delay::FrameRing;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,9 @@ pub enum RtmpMode {
     Pull,
     /// 本ソフトが待ち受ける（配信元から rtmp://このPC:1935/live/<key> に送ってもらう）
     Listen,
+    /// メディアサーバー（janscope-media）が映像サンドボックスの枠で切り出した映像を受ける
+    /// （url は http://127.0.0.1:47810/region/face-A.mjpg のような MJPEG の流れ）
+    Media,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,6 +68,8 @@ impl StreamConfig {
                 ]
                 .map(String::from),
             ),
+            // メディアサーバーからは ffmpeg を使わずに直接受ける（ここは使わない）
+            RtmpMode::Media => a.extend(["-i".into(), self.url.clone()]),
             RtmpMode::Pull => {
                 if self.url.starts_with("rtmp") {
                     a.extend(["-rw_timeout".into(), "5000000".into()]);
@@ -143,6 +150,7 @@ impl FaceStream {
             .spawn(move || match cfg.mode {
                 RtmpMode::Pull => run(cfg, s2, st2, c2),
                 RtmpMode::Listen => run_listen(cfg, s2, st2, c2),
+                RtmpMode::Media => run_media(cfg, s2, st2),
             })
             .expect("thread");
         FaceStream {
@@ -426,6 +434,38 @@ fn run_listen(
             sh.fps = 0.0;
         }
         return;
+    }
+}
+
+/// メディアサーバーから、切り出し済みの MJPEG を受ける（ffmpeg は使わない）。切れたらつなぎ直す
+fn run_media(cfg: StreamConfig, shared: Arc<Mutex<Shared>>, stop: Arc<AtomicBool>) {
+    let mut seq = 0u64;
+    let mut backoff = Duration::from_millis(500);
+    while !stop.load(Ordering::SeqCst) {
+        match http::stream(&cfg.url, Duration::from_secs(3)) {
+            Ok(mut r) => {
+                {
+                    let mut sh = shared.lock().unwrap();
+                    if matches!(sh.status, StreamStatus::Failed(_)) {
+                        sh.status = StreamStatus::Starting;
+                    }
+                    sh.last_error = None;
+                }
+                if pump(&mut r, &shared, &stop, &mut seq) {
+                    backoff = Duration::from_millis(500);
+                }
+                let mut sh = shared.lock().unwrap();
+                sh.status = StreamStatus::NoSignal;
+                sh.fps = 0.0;
+            }
+            Err(e) => {
+                let mut sh = shared.lock().unwrap();
+                sh.status = StreamStatus::NoSignal;
+                sh.last_error = Some(format!("メディアサーバーから受け取れません: {e}"));
+            }
+        }
+        sleep_unless_stopped(&stop, backoff);
+        backoff = (backoff * 2).min(Duration::from_secs(3));
     }
 }
 
