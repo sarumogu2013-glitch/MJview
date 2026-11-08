@@ -49,7 +49,8 @@ enum : UINT {
     ID_BROADCAST,
     ID_INPUT,
     ID_PLAYER,
-    ID_DEMO,
+    ID_DEMO,  // ダミーで確認（配信クライアント＋中のダミーサーバー）
+    ID_SERVER_DUMMY,
     ID_STOP_ALL,
     ID_SETTINGS,
     ID_EXIT,
@@ -130,7 +131,6 @@ struct Settings {
     std::wstring port = L"47800";
     std::wstring code;
     std::wstring playerMonitor = L"1";
-    bool playerFullscreen = true;
     bool checkOnStart = true;
 };
 
@@ -151,7 +151,6 @@ static Settings LoadSettings() {
     s.port = IniGet(L"server_port", s.port);
     s.code = IniGet(L"code", L"");
     s.playerMonitor = IniGet(L"player_monitor", s.playerMonitor);
-    s.playerFullscreen = IniGet(L"player_fullscreen", L"1") != L"0";
     s.checkOnStart = IniGet(L"check_update_on_start", L"1") != L"0";
     return s;
 }
@@ -160,7 +159,6 @@ static void SaveSettings(const Settings& s) {
     IniSet(L"server_port", s.port);
     IniSet(L"code", s.code);
     IniSet(L"player_monitor", s.playerMonitor);
-    IniSet(L"player_fullscreen", s.playerFullscreen ? L"1" : L"0");
     IniSet(L"check_update_on_start", s.checkOnStart ? L"1" : L"0");
 }
 
@@ -182,7 +180,7 @@ static bool ValidPort(const std::wstring& p) {
 }
 
 // ---- 起動したもの ----
-// 各機能（サーバー・配信クライアント・入力担当・選手用画面・画面の確認）は1つずつ。
+// 各機能（サーバー・配信クライアント・入力担当・選手用画面・ダミーで確認）は1つずつ。
 // ツールバーのボタンで起動し、動いている間はボタンが押された状態。もう一度押すと終了する
 struct Child {
     std::wstring name;
@@ -414,7 +412,7 @@ static bool NeedCode() {
     return false;
 }
 
-static void StartServer(bool resume) {
+static void StartServer(bool resume, bool dummy = false) {
     if (!ValidCode(g_set.code)) {
         g_set.code = NewCode();
         SaveSettings(g_set);
@@ -425,15 +423,17 @@ static void StartServer(bool resume) {
     }
     std::wstring args = L"--port " + g_set.port + L" --code " + g_set.code;
     if (resume) args += L" --resume-latest";
-    Launch(ID_SERVER, resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
+    if (dummy) args += L" --dummy";
+    Launch(ID_SERVER, dummy ? L"サーバー（ダミー対局データ）" : resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
     InvalidateRect(g_main, nullptr, TRUE);
 }
 
 static void StartClient(UINT fn) {
     std::wstring args, title = L"配信クライアント";
     if (fn == ID_DEMO) {
-        args = L"--demo";
-        title = L"画面の確認";
+        // 機能の確認用: クライアントの中でダミー対局データ入りのサーバーを動かす（サーバーも接続コードも要らない）
+        args = L"--dummy-server";
+        title = L"ダミーで確認";
     } else {
         if (!NeedCode()) return;
         args = L"--server " + ServerAddr() + L" --code " + g_set.code;
@@ -443,7 +443,8 @@ static void StartClient(UINT fn) {
         title = L"入力担当";
     } else if (fn == ID_PLAYER) {
         args += L" --role player";
-        if (g_set.playerFullscreen) args += L" --fullscreen --monitor " + g_set.playerMonitor;
+        // 起動時はウィンドウ（最大化ボタン・F11 で全画面）。設定のモニターに開く
+        args += L" --monitor " + g_set.playerMonitor;
         title = L"選手用画面";
     }
     // 操作ウィンドウはメインウィンドウに埋め込む（選手用画面は選手側のモニターに出すので別ウィンドウ）
@@ -654,7 +655,7 @@ static void About() {
 
 // ---- 接続の設定ウィンドウ ----
 static HWND g_setWnd;
-enum { IDC_HOST = 2001, IDC_PORT, IDC_CODE, IDC_NEWCODE, IDC_MON, IDC_FULL, IDC_ONSTART, IDC_OK, IDC_CANCEL };
+enum { IDC_HOST = 2001, IDC_PORT, IDC_CODE, IDC_NEWCODE, IDC_MON, IDC_ONSTART, IDC_OK, IDC_CANCEL };
 
 static HWND AddCtl(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id, DWORD ex = 0) {
     UINT dpi = GetDpiForWindow(parent);
@@ -690,10 +691,8 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             AddCtl(h, L"EDIT", g_set.code.c_str(), WS_BORDER | ES_NUMBER | WS_TABSTOP, 16, y + 22, 120, 24, IDC_CODE);
             AddCtl(h, L"BUTTON", L"新しく作る", BS_PUSHBUTTON | WS_TABSTOP, 146, y + 21, 100, 26, IDC_NEWCODE);
             y += 60;
-            AddCtl(h, L"STATIC", L"選手用画面を出すモニター（0 から数える）", 0, 16, y, 300, 20, -1);
+            AddCtl(h, L"STATIC", L"選手用画面を出すモニター（0 から数える。ウィンドウで開き、F11 で全画面）", 0, 16, y, 340, 20, -1);
             AddCtl(h, L"EDIT", g_set.playerMonitor.c_str(), WS_BORDER | ES_NUMBER | WS_TABSTOP, 16, y + 22, 60, 24, IDC_MON);
-            AddCtl(h, L"BUTTON", L"全画面で出す", BS_AUTOCHECKBOX | WS_TABSTOP, 90, y + 22, 200, 24, IDC_FULL);
-            CheckDlgButton(h, IDC_FULL, g_set.playerFullscreen ? BST_CHECKED : BST_UNCHECKED);
             y += 60;
             AddCtl(h, L"BUTTON", L"起動時に新しい版があるか確かめる（入れ替えは手動）", BS_AUTOCHECKBOX | WS_TABSTOP, 16, y, 340, 24, IDC_ONSTART);
             CheckDlgButton(h, IDC_ONSTART, g_set.checkOnStart ? BST_CHECKED : BST_UNCHECKED);
@@ -711,7 +710,6 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     s.port = GetText(h, IDC_PORT);
                     s.code = GetText(h, IDC_CODE);
                     s.playerMonitor = GetText(h, IDC_MON);
-                    s.playerFullscreen = IsDlgButtonChecked(h, IDC_FULL) == BST_CHECKED;
                     s.checkOnStart = IsDlgButtonChecked(h, IDC_ONSTART) == BST_CHECKED;
                     if (s.host.empty() || s.host.find(L' ') != std::wstring::npos) { MessageBoxW(h, L"サーバーのアドレスを入れてください", L"接続の設定", MB_OK | MB_ICONWARNING); return 0; }
                     if (!ValidPort(s.port)) { MessageBoxW(h, L"ポートは 1〜65535 の数字です", L"接続の設定", MB_OK | MB_ICONWARNING); return 0; }
@@ -769,7 +767,10 @@ static HMENU BuildMenu() {
     AppendMenuW(run, MF_STRING, ID_INPUT, L"入力担当(&I)");
     AppendMenuW(run, MF_STRING, ID_PLAYER, L"選手用画面(&P)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(run, MF_STRING, ID_DEMO, L"画面の確認（サーバーなし）(&D)");
+    HMENU review = CreatePopupMenu();
+    AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（配信クライアント＋中のダミーサーバー）(&D)");
+    AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY, L"サーバー（ダミー対局データ）(&S)");
+    AppendMenuW(run, MF_POPUP, (UINT_PTR)review, L"機能の確認用(&T)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(run, MF_STRING, ID_STOP_ALL, L"起動したものをすべて閉じる(&C)");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)run, L"起動(&R)");
@@ -777,7 +778,7 @@ static HMENU BuildMenu() {
     HMENU view = CreatePopupMenu();
     AppendMenuW(view, MF_STRING, ID_VIEW_BROADCAST, L"配信クライアントの操作画面(&B)");
     AppendMenuW(view, MF_STRING, ID_VIEW_INPUT, L"入力担当の操作画面(&I)");
-    AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"画面の確認(&D)");
+    AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"ダミーで確認(&D)");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(view, MF_STRING, ID_VIEW_INFO, L"バージョン情報の表示に戻す(&V)");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"表示(&V)");
@@ -828,7 +829,7 @@ static const TbItem kToolbar[] = {
     {ID_BROADCAST, L"配信クライアント", L"出力ウィンドウ（OBS で取り込む）と操作ウィンドウ"},
     {ID_INPUT, L"入力担当", L"入力担当の操作ウィンドウ"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
-    {ID_DEMO, L"画面の確認", L"サーバーなしで見本の画面を出します"},
+    {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした配信クライアント（サーバー・接続コードは不要）"},
     {0, nullptr, nullptr},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
     {ID_UPDATE_CHECK, L"更新の確認", L"新しい版があるか確かめます"},
@@ -1037,6 +1038,11 @@ static void OnCommand(UINT id) {
         case ID_INPUT:
         case ID_PLAYER:
         case ID_DEMO: Toggle(id); break;
+        case ID_SERVER_DUMMY:
+            if (Running(ID_SERVER)) Error(L"サーバーはもう動いています。ダミーで起動するには、いったん終了してください。");
+            else StartServer(false, true);
+            UpdateToggleButtons();
+            break;
         case ID_SERVER_RESUME:
             if (Running(ID_SERVER)) Error(L"サーバーはもう動いています。再開するには、いったん終了してください。");
             else StartServer(true);

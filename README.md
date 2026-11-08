@@ -52,7 +52,9 @@
 
 ## ランチャー（JanScope.exe）
 
-配布フォルダの `JanScope.exe` をダブルクリックすると、ツールバーのボタンから「サーバー」「配信クライアント」「入力担当」「選手用画面」「画面の確認」を起動できます。
+配布フォルダの `JanScope.exe` をダブルクリックすると、ツールバーのボタンから「サーバー」「配信クライアント」「入力担当」「選手用画面」「ダミーで確認」を起動・終了できます（押すと起動、動いている間はボタンが押された状態、もう一度押すと終了）。
+
+- 機能の確認用: 「ダミーで確認」は、ダミー対局データ入りのサーバーを中で動かした配信クライアント（サーバー・接続コードは不要）。「起動 → 機能の確認用 → サーバー（ダミー対局データ）」は、局の途中から始まるサーバー（`data/dummy` に保存し、本番のログ・大会通算と混ざらない）
 
 - 「ファイル → 接続の設定」に、サーバーのアドレス・ポート・接続コード・選手用画面のモニターを入れておく（`JanScope.ini` に保存。更新で消えない）
 - このPCでサーバーを起動すると、設定の接続コードで起動するので、クライアント側でコードを打たなくてよい（コードがなければ自動で作る）
@@ -69,10 +71,13 @@ cargo run --release -p janscope-server -- --port 47800
 cargo run --release -p janscope-client -- --server <サーバーのIP>:47800 --code <接続コード>
 
 # 選手用画面（配信用PCの別モニター、別プロセスで起動）
-cargo run --release -p janscope-client -- --server <IP>:47800 --code <接続コード> --role player --fullscreen --monitor 1
+cargo run --release -p janscope-client -- --server <IP>:47800 --code <接続コード> --role player --monitor 1   # ウィンドウで開く。最大化・F11 で全画面
 
-# サーバーなしで画面だけ確認（見本の状態）
-cargo run -p janscope-client -- --demo
+# 機能の確認用: ダミー対局データ入りのサーバーを中で動かしたクライアント
+cargo run -p janscope-client -- --dummy-server
+
+# サーバーをダミー対局データ（局の途中）で起動
+cargo run -p janscope-server -- --dummy
 ```
 
 主なキー: テンキー `−` / `+` で残り牌数、`F1`〜`F4` で選手画面の手動切替（`F5` で自動）、`Ctrl+Z` / `Ctrl+Y` で取り消し・やり直し。

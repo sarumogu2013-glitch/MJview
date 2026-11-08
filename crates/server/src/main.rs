@@ -104,6 +104,7 @@ fn usage() -> ! {
          \x20 --code <6桁>       接続コード（既定: 起動ごとに乱数）\n\
          \x20 --resume <ファイル> 指定したログから続きを再開\n\
          \x20 --resume-latest    いちばん新しいログから続きを再開\n\
+         \x20 --dummy            機能の確認用: ダミー対局データ（局の途中）で始める（data/dummy に保存）\n\
          \x20 --no-update-check  起動時に新しい版を確かめない\n\
          \x20 --check-update     新しい版があるか確かめて終わる\n\
          \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\
@@ -126,6 +127,7 @@ async fn main() {
     let mut resume = None;
     let mut resume_latest = false;
     let mut update_check = true;
+    let mut dummy = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -140,6 +142,7 @@ async fn main() {
             "--resume" => resume = Some(args.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--resume-latest" => resume_latest = true,
             "--no-update-check" => update_check = false,
+            "--dummy" => dummy = true,
             "--check-update" => {
                 print_update_check();
                 return;
@@ -164,11 +167,20 @@ async fn main() {
             );
         }
     }
+    // ダミーは本番のログ・大会通算と混ざらないように別のフォルダ
+    if dummy {
+        data = data.join("dummy");
+        println!(
+            " ダミー対局データで始めます（機能の確認用。保存先 {}）",
+            data.display()
+        );
+    }
     let cfg = ServerConfig {
         bind: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
         code: code.unwrap_or_else(new_code),
         data_dir: data,
         resume,
+        dummy,
     };
     let running = match start(cfg).await {
         Ok(r) => r,

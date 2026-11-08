@@ -16,6 +16,9 @@ janscope-core.workspace = true
 janscope-netclient.workspace = true
 janscope-video.workspace = true
 janscope-update.workspace = true
+# --dummy-server: ダミー対局データ入りのサーバーをクライアントの中で動かす
+janscope-server.workspace = true
+tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bevy = { version = "=0.20.1", default-features = false, features = [

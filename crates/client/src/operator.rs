@@ -349,6 +349,30 @@ pub fn operator_ui(
                     format!("（最後の操作: {}）", by.name_ja()),
                 );
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!(
+                    "JanScope {}  遅延 {}ms",
+                    janscope_core::VERSION,
+                    table.rtt_ms / 2
+                ));
+                if let Some(v) = settings.update.available() {
+                    if ui
+                        .small_button(
+                            egui::RichText::new(format!("新しい版 {v} あり"))
+                                .color(egui::Color32::from_rgb(255, 210, 90)),
+                        )
+                        .on_hover_text(
+                            "設定 →「更新」で入れ替えられます（配信中は入れ替えないこと）",
+                        )
+                        .clicked()
+                    {
+                        settings.open_tab("更新");
+                    }
+                }
+            });
+        });
+        // 2段目: 操作（接続状態の文字が長くても押し出されないよう、1段にまとめる）
+        ui.horizontal_wrapped(|ui| {
             let (cu, cr) = table
                 .full
                 .as_ref()
@@ -380,27 +404,6 @@ pub fn operator_ui(
                     ),
                 );
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!(
-                    "JanScope {}  遅延 {}ms",
-                    janscope_core::VERSION,
-                    table.rtt_ms / 2
-                ));
-                if let Some(v) = settings.update.available() {
-                    if ui
-                        .small_button(
-                            egui::RichText::new(format!("新しい版 {v} あり"))
-                                .color(egui::Color32::from_rgb(255, 210, 90)),
-                        )
-                        .on_hover_text(
-                            "設定 →「更新」で入れ替えられます（配信中は入れ替えないこと）",
-                        )
-                        .clicked()
-                    {
-                        settings.open_tab("更新");
-                    }
-                }
-            });
         });
         if let Some(e) = table.last_error.clone() {
             ui.horizontal(|ui| {

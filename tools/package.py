@@ -48,8 +48,9 @@ START_TXT = """JanScope {version}
   コマンドで起動する場合:
   サーバー（卓のノートPC）     : janscope-server.exe            （接続コードが表示されます）
   配信クライアント（配信用PC）  : janscope-client.exe --server <サーバーのIP>:47800 --code <接続コード>
-  選手用画面                  : janscope-client.exe --server <IP>:47800 --code <接続コード> --role player --fullscreen --monitor 1
-  サーバーなしで画面だけ確認    : janscope-client.exe --demo
+  選手用画面                  : janscope-client.exe --server <IP>:47800 --code <接続コード> --role player --monitor 1
+  機能の確認（ダミーサーバー）  : janscope-client.exe --dummy-server
+  サーバー（ダミー対局データ）  : janscope-server.exe --dummy
 
 ■ 更新
   起動時に新しい版があるかだけ確かめます。入れ替えは、クライアントの「設定 → 更新」か

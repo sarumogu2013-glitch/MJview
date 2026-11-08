@@ -16,6 +16,65 @@ pub fn embedded() -> bool {
     EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// 1920×1080 で配置した画面（出力・選手用画面）を映すカメラの印。窓の大きさに合わせて縮め、真ん中に置く
+#[derive(Component)]
+pub struct Fit1080;
+
+/// 窓の大きさが変わったら、画面の倍率（scale factor）を「窓 ÷ 1920×1080」にして、配置はそのままで窓に収める。
+/// 縦横比が違うときは、カメラの表示範囲（viewport）を真ん中に寄せて、余りは黒にする
+pub fn fit_1080(
+    mut cams: Query<(&mut Camera, &bevy::camera::RenderTarget), With<Fit1080>>,
+    mut windows: Query<&mut Window>,
+    primary: Query<Entity, With<PrimaryWindow>>,
+) {
+    use bevy::camera::{RenderTarget, Viewport};
+    use bevy::window::WindowRef;
+    for (mut cam, target) in &mut cams {
+        let e = match target {
+            RenderTarget::Window(WindowRef::Entity(e)) => *e,
+            RenderTarget::Window(WindowRef::Primary) => match primary.single() {
+                Ok(e) => e,
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+        let Ok(mut w) = windows.get_mut(e) else {
+            continue;
+        };
+        let (pw, ph) = (
+            w.resolution.physical_width(),
+            w.resolution.physical_height(),
+        );
+        if pw == 0 || ph == 0 {
+            continue;
+        }
+        let f = (pw as f32 / 1920.0).min(ph as f32 / 1080.0).max(0.05);
+        if w.resolution
+            .scale_factor_override()
+            .is_none_or(|o| (o - f).abs() > 0.0005)
+        {
+            w.resolution.set_scale_factor_override(Some(f));
+        }
+        let size = UVec2::new(
+            ((1920.0 * f).round() as u32).clamp(1, pw),
+            ((1080.0 * f).round() as u32).clamp(1, ph),
+        );
+        let pos = UVec2::new((pw - size.x) / 2, (ph - size.y) / 2);
+        let want = Some(Viewport {
+            physical_position: pos,
+            physical_size: size,
+            ..default()
+        });
+        let same = cam
+            .viewport
+            .as_ref()
+            .is_some_and(|v| v.physical_position == pos && v.physical_size == size);
+        if !same {
+            cam.viewport = want;
+        }
+    }
+}
+
 /// 出力ウィンドウ（配信に載せる画面）の印
 #[derive(Component)]
 pub struct OutputWindow;
@@ -25,6 +84,8 @@ pub enum WinReq {
     /// 出力ウィンドウを、このモニター（0から）に全画面で出す
     OutputFullscreen(usize),
     OutputWindowed,
+    /// 出力ウィンドウを 1920×1080 に戻す（OBS でそのまま取り込める大きさ）
+    OutputSize1080,
     OperatorFullscreen,
     OperatorWindowed,
     Quit,
@@ -36,6 +97,8 @@ pub struct WindowCtl {
     pub requests: Vec<WinReq>,
     pub has_output: bool,
     pub output_fullscreen: bool,
+    /// 出力ウィンドウの中身の大きさ（物理ピクセル）
+    pub output_size: (u32, u32),
     pub operator_fullscreen: bool,
     /// つながっているモニターの名前（0から）
     pub monitors: Vec<String>,
@@ -86,6 +149,18 @@ impl WindowCtl {
                 {
                     let m = self.output_monitor;
                     self.request(WinReq::OutputFullscreen(m));
+                }
+                if self.output_size != (1920, 1080) && self.output_size != (0, 0) {
+                    let (w, h) = self.output_size;
+                    if ui
+                        .button("1920×1080 に戻す")
+                        .on_hover_text(format!(
+                            "いまの出力ウィンドウは {w}×{h}。OBS でそのまま取り込むには 1920×1080 に戻します"
+                        ))
+                        .clicked()
+                    {
+                        self.request(WinReq::OutputSize1080);
+                    }
                 }
             }
             ui.separator();
@@ -235,6 +310,12 @@ pub fn apply_window_ctl(
                     w.mode = WindowMode::Windowed;
                 }
             }
+            WinReq::OutputSize1080 => {
+                if let Ok(mut w) = output.single_mut() {
+                    w.mode = WindowMode::Windowed;
+                    w.resolution.set_physical_resolution(1920, 1080);
+                }
+            }
             WinReq::OperatorFullscreen => {
                 if let Ok(mut w) = primary.single_mut() {
                     w.mode = WindowMode::BorderlessFullscreen(MonitorSelection::Current);
@@ -254,6 +335,15 @@ pub fn apply_window_ctl(
     ctl.output_fullscreen = output
         .single()
         .is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));
+    ctl.output_size = output
+        .single()
+        .map(|w| {
+            (
+                w.resolution.physical_width(),
+                w.resolution.physical_height(),
+            )
+        })
+        .unwrap_or((0, 0));
     ctl.operator_fullscreen = primary
         .single()
         .is_ok_and(|w| !matches!(w.mode, WindowMode::Windowed));

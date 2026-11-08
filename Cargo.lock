@@ -3082,11 +3082,13 @@ dependencies = [
  "bevy_egui",
  "janscope-core",
  "janscope-netclient",
+ "janscope-server",
  "janscope-update",
  "janscope-video",
  "resvg",
  "serde",
  "serde_json",
+ "tokio",
  "winit",
  "winresource",
 ]

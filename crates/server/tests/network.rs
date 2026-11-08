@@ -31,6 +31,7 @@ fn cfg(dir: &PathBuf, port: u16, resume: Option<PathBuf>) -> ServerConfig {
         code: CODE.into(),
         data_dir: dir.clone(),
         resume,
+        dummy: false,
     }
 }
 
@@ -352,4 +353,28 @@ async fn tournament_records_finished_games() {
     assert_eq!(saved.name, "春季大会");
     assert_eq!(saved.games.len(), 1);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// --dummy: ダミー対局データ（局の途中）で始まり、取り消しもできる
+#[tokio::test(flavor = "multi_thread")]
+async fn dummy_game_data() {
+    let dir = tmp_dir("dummy");
+    let mut c = cfg(&dir, 0, None);
+    c.dummy = true;
+    let running = start(c).await.unwrap();
+    let addr = running.addr;
+    tokio::task::spawn_blocking(move || {
+        let mut cl = client(addr, ClientRole::Broadcast, CODE);
+        let e = wait_for(&cl, |e| full_state(e).is_some());
+        let s = full_state(&e).unwrap();
+        assert_eq!(s.seats[3].player.name, "高橋 美咲");
+        assert!(s.seats[3].riichi, "北家のリーチの途中");
+        // 取り消すとリーチが外れる（ダミーも普通の操作の列）
+        let id = cl.undo();
+        assert_eq!(wait_result(&cl, id), None);
+        wait_for(&cl, |e| full_state(e).is_some_and(|s| !s.seats[3].riichi));
+    })
+    .await
+    .unwrap();
+    running.stop();
 }

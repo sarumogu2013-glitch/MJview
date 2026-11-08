@@ -45,6 +45,8 @@ struct Args {
     code: String,
     role: ClientRole,
     demo: bool,
+    /// 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ
+    dummy_server: bool,
     screenshot: Option<String>,
     fullscreen: bool,
     monitor: Option<usize>,
@@ -60,7 +62,8 @@ fn usage() -> ! {
          \x20 --fullscreen                   選手用画面を全画面にする\n\
          \x20 --monitor <番号>                全画面にするモニター（0から）\n\
          \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）\n\
-         \x20 --embed                        操作ウィンドウをランチャー（JanScope.exe）に埋め込む（ランチャーが付ける）",
+         \x20 --embed                        操作ウィンドウをランチャー（JanScope.exe）に埋め込む（ランチャーが付ける）\n\
+         \x20 --dummy-server                 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ（--server・--code は不要）",
         janscope_core::VERSION
     );
     std::process::exit(2)
@@ -72,6 +75,7 @@ fn parse_args() -> Args {
         code: String::new(),
         role: ClientRole::Broadcast,
         demo: false,
+        dummy_server: false,
         screenshot: None,
         fullscreen: false,
         monitor: None,
@@ -92,6 +96,7 @@ fn parse_args() -> Args {
                 }
             }
             "--demo" => a.demo = true,
+            "--dummy-server" => a.dummy_server = true,
             "--screenshot" => a.screenshot = Some(it.next().unwrap_or_else(|| usage())),
             "--fullscreen" => a.fullscreen = true,
             "--monitor" => a.monitor = it.next().and_then(|v| v.parse().ok()),
@@ -131,15 +136,25 @@ fn main() {
         };
         Window {
             title: "JanScope 選手用画面".into(),
-            resolution: WindowResolution::new(1920, 1080).with_scale_factor_override(1.0),
+            // 起動時はウィンドウ（最大化ボタンで最大化、F11 で全画面）。中身は 1920×1080 の配置を窓の大きさに合わせて縮める
+            resolution: WindowResolution::new(1280, 720),
+            resizable: true,
             mode,
+            position: args
+                .monitor
+                .map(|m| WindowPosition::Centered(MonitorSelection::Index(m)))
+                .unwrap_or(WindowPosition::Automatic),
             present_mode: PresentMode::AutoVsync,
             ..default()
         }
     } else {
         Window {
             // ランチャーはこの題名（「JanScope 操作」で始まる）で操作ウィンドウを見つけて埋め込む
-            title: format!("JanScope 操作（{}）", role.name_ja()),
+            title: if args.dummy_server {
+                format!("JanScope 操作（{}・ダミーサーバー）", role.name_ja())
+            } else {
+                format!("JanScope 操作（{}）", role.name_ja())
+            },
             resolution: WindowResolution::new(1500, 980),
             present_mode: PresentMode::AutoVsync,
             // 埋め込むときは枠なしで画面の外に出し、ランチャーが中に入れる
@@ -182,10 +197,26 @@ fn main() {
     .add_systems(PreUpdate, (theme::sync_theme, sync_tiles))
     .add_systems(
         Update,
-        (windows::apply_window_ctl, windows::set_window_icons),
+        (
+            windows::apply_window_ctl,
+            windows::set_window_icons,
+            windows::fit_1080,
+        ),
     );
 
-    if args.demo {
+    if args.dummy_server {
+        // ダミーサーバー: 中で本物のサーバー（ダミー対局データ入り）を動かすので、操作・取り消しなど全部試せる
+        match start_dummy_server() {
+            Ok((addr, code)) => {
+                app.insert_resource(net::Net::connect(&addr, &code, role));
+            }
+            Err(e) => {
+                eprintln!("ダミーサーバーを起動できません: {e}");
+                app.insert_resource(net::Net::connect("127.0.0.1:9", "", role));
+            }
+        }
+        app.add_systems(PreUpdate, net::poll_net);
+    } else if args.demo {
         // 見本の状態を表示する。操作ウィンドウも描けるよう、つながらない宛先の接続を置いておく（状態は取り込まない）
         app.insert_resource(net::Net::connect("127.0.0.1:9", "", role));
         app.add_systems(Startup, demo::install);
@@ -289,8 +320,53 @@ fn reload_config_file(
     }
 }
 
+/// --dummy-server: ダミー対局データ入りのサーバーを、このプロセスの中（別スレッド）で動かす。宛先と接続コードを返す
+fn start_dummy_server() -> Result<(String, String), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("janscope-dummy-server".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                let code = janscope_server::new_code();
+                let cfg = janscope_server::ServerConfig {
+                    bind: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                    code: code.clone(),
+                    // 本番のログ・大会通算と混ざらないよう、一時フォルダに置く
+                    data_dir: std::env::temp_dir().join("janscope-dummy"),
+                    resume: None,
+                    dummy: true,
+                };
+                match janscope_server::start(cfg).await {
+                    Ok(running) => {
+                        let _ = tx.send(Ok((running.addr.to_string(), code)));
+                        // アプリが終わるまで動かし続ける
+                        std::future::pending::<()>().await;
+                        drop(running);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e.to_string()));
+                    }
+                }
+            });
+        })
+        .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|e| e.to_string())?
+}
+
 fn setup_player_window(mut commands: Commands) {
-    commands.spawn((Camera2d, player_screen::PlayerCamera));
+    commands.spawn((Camera2d, player_screen::PlayerCamera, windows::Fit1080));
 }
 
 fn setup_operator_windows(
@@ -305,10 +381,11 @@ fn setup_operator_windows(
         let out = commands
             .spawn(Window {
                 title: "JanScope 出力".into(),
-                resolution: WindowResolution::new(1920, 1080).with_scale_factor_override(1.0),
-                // 起動時は普通のウィンドウ。全画面は操作ウィンドウのツールバー・メニューから
+                resolution: WindowResolution::new(1920, 1080),
+                // 起動時は普通のウィンドウ。大きさを変えられる（Windows のスナップ・最大化）。
+                // 中身は 1920×1080 の配置を窓の大きさに合わせて縮める。全画面は操作ウィンドウのツールバー・メニューから
                 decorations,
-                resizable: false,
+                resizable: true,
                 position: WindowPosition::Automatic,
                 present_mode: PresentMode::AutoVsync,
                 ..default()
@@ -323,6 +400,7 @@ fn setup_operator_windows(
             },
             RenderTarget::Window(WindowRef::Entity(out)),
             output::OutputCamera,
+            windows::Fit1080,
         ));
     }
 }

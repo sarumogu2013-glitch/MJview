@@ -33,6 +33,8 @@ pub struct ServerConfig {
     pub data_dir: PathBuf,
     /// 再開するログファイル（None なら新しいログを作る）
     pub resume: Option<PathBuf>,
+    /// 機能の確認用: ダミー対局データ（core::dummy）を入れた状態で始める
+    pub dummy: bool,
 }
 
 /// 6桁の接続コードを作る。
@@ -161,6 +163,13 @@ pub async fn start(cfg: ServerConfig) -> std::io::Result<Running> {
             GameLog::create(&cfg.data_dir.join("logs").join(name)).map_err(std::io::Error::other)?
         }
     };
+    let mut log = log;
+    if cfg.dummy && cfg.resume.is_none() {
+        let at = now_ms();
+        for a in janscope_core::dummy::actions() {
+            log.act(a, at).map_err(std::io::Error::other)?;
+        }
+    }
     let log_path = log.path().map(Path::to_path_buf);
     let listener = TcpListener::bind(cfg.bind).await?;
     let addr = listener.local_addr()?;
