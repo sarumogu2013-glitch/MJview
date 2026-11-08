@@ -189,6 +189,12 @@ pub struct SeatState {
     /// この局の手牌が登録済み（配牌の登録が終わった）
     #[serde(default)]
     pub hand_known: bool,
+    /// 一発の権利がある（立直の宣言牌を打ってから、自分の次の打牌・誰かの鳴きまで）
+    #[serde(default)]
+    pub ippatsu: bool,
+    /// ダブル立直（鳴きのない1巡目に立直した）
+    #[serde(default)]
+    pub double_riichi: bool,
 }
 
 impl SeatState {
@@ -306,6 +312,15 @@ pub struct TableState {
     /// 牌の手入力の手番
     #[serde(default)]
     pub turn: Turn,
+    /// この局で鳴き・槓があった（1巡目の役・一発の判定に使う）
+    #[serde(default)]
+    pub calls_this_hand: bool,
+    /// 今のツモ牌は嶺上牌（嶺上開花の判定）
+    #[serde(default)]
+    pub rinshan_drawn: bool,
+    /// 打牌のあとにめくる槓ドラの枚数（大明槓・加槓。暗槓はすぐめくる）
+    #[serde(default)]
+    pub kan_dora_pending: u8,
 }
 
 impl Default for TableState {
@@ -319,6 +334,8 @@ impl Default for TableState {
             drawn: None,
             river: vec![],
             hand_known: false,
+            ippatsu: false,
+            double_riichi: false,
         };
         TableState {
             config: GameConfig::default(),
@@ -338,6 +355,9 @@ impl Default for TableState {
             final_results: None,
             extension: false,
             turn: Turn::None,
+            calls_this_hand: false,
+            rinshan_drawn: false,
+            kan_dora_pending: 0,
         }
     }
 }

@@ -61,6 +61,8 @@ pub struct OperatorUi {
     kan_dora: Option<Tile>,
     // ドラの入力
     dora_edit: Vec<Tile>,
+    /// 最後に見た卓のドラ表示牌（変わったら入力欄を合わせる）
+    dora_seen: Vec<Tile>,
     // 流局
     tenpai: [bool; 4],
     nagashi: [bool; 4],
@@ -112,6 +114,7 @@ impl Default for OperatorUi {
             kan_kind: KanKind::Ankan,
             kan_dora: None,
             dora_edit: vec![],
+            dora_seen: vec![],
             tenpai: [false; 4],
             nagashi: [false; 4],
             draw_choice: DrawChoice::Exhaustive,
@@ -599,7 +602,8 @@ pub fn operator_ui(
                 let (key, picked, changed) = {
                     let tex = &u.tex;
                     let tb = |ui: &mut egui::Ui, t: Tile, w: f32| tile_button_tex(ui, tex, t, w);
-                    u.tiles.panel(ui, &state, &mut mode, &tb)
+                    let tx = |t: Tile| tile_tex(tex, t);
+                    u.tiles.panel(ui, &state, &mut mode, &tb, &tx)
                 };
                 if changed {
                     cfg.prefs.tile_mode = mode;
@@ -616,7 +620,18 @@ pub fn operator_ui(
                     tile_outcome(u, o, &net, &mut table);
                 }
                 ui.separator();
-                in_hand_panel(ui, u, &net, &state);
+                if mode == crate::tile_input::TileMode::Off {
+                    in_hand_panel(ui, u, &net, &state);
+                } else {
+                    // 手牌・河を使うときは、残り牌数・リーチ・槓は自動。代わりに進行の履歴
+                    let log = table
+                        .full
+                        .as_ref()
+                        .map(|f| f.hand_log.clone())
+                        .unwrap_or_default();
+                    u.tiles.history(ui, &state, &log, &*net);
+                    dora_panel(ui, u, &net, &state);
+                }
                 ui.separator();
                 win_panel(ui, u, &net, &mut table, &state);
                 ui.separator();
@@ -699,13 +714,22 @@ fn tile_button(ui: &mut egui::Ui, u: &OperatorUi, t: Tile, w: f32) -> egui::Resp
     tile_button_tex(ui, &u.tex, t, w)
 }
 
+/// 牌の絵（不明の牌は裏）
+fn tile_tex(tex: &HashMap<String, egui::TextureId>, t: Tile) -> Option<egui::TextureId> {
+    if t.is_unknown() {
+        tex.get("back").copied()
+    } else {
+        tex.get(&t.to_string()).copied()
+    }
+}
+
 fn tile_button_tex(
     ui: &mut egui::Ui,
     tex: &HashMap<String, egui::TextureId>,
     t: Tile,
     w: f32,
 ) -> egui::Response {
-    match tex.get(&t.to_string()) {
+    match tile_tex(tex, t).as_ref() {
         Some(id) => ui
             .add(egui::Button::image(egui::Image::new(
                 egui::load::SizedTexture::new(*id, [w, w * 4.0 / 3.0]),
@@ -869,6 +893,41 @@ fn hand_start_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &Ta
                 u.confirm_end = false;
             }
         });
+    }
+}
+
+/// 手牌・河を使うときのドラ表示牌の直し（テンキーで入れなかったとき・直すとき）
+fn dora_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &TableState) {
+    if u.dora_seen != state.dora_indicators {
+        u.dora_seen = state.dora_indicators.clone();
+        u.dora_edit = state.dora_indicators.clone();
+    }
+    ui.collapsing("ドラ表示牌を直す", |ui| {
+        ui.horizontal(|ui| {
+            ui.label("ドラ表示牌:");
+            let mut v = std::mem::take(&mut u.dora_edit);
+            tile_row(ui, u, &mut v, 24.0);
+            u.dora_edit = v;
+        });
+        if let Some(t) = palette(ui, u, 26.0, false) {
+            if u.dora_edit.len() < 5 {
+                u.dora_edit.push(t);
+            }
+        }
+        ui.horizontal(|ui| {
+            if u.dora_edit != state.dora_indicators && ui.button("ドラ表示牌を確定").clicked()
+            {
+                net.act(Action::SetDora {
+                    tiles: u.dora_edit.clone(),
+                });
+            }
+            if ui.button("入力し直す").clicked() {
+                u.dora_edit.clear();
+            }
+        });
+    });
+    if u.dora_edit.is_empty() && !state.dora_indicators.is_empty() {
+        u.dora_edit = state.dora_indicators.clone();
     }
 }
 

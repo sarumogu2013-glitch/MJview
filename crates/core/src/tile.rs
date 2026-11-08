@@ -39,6 +39,11 @@ const NUM_JA: [&str; 9] = ["一", "二", "三", "四", "五", "六", "七", "八
 
 impl Tile {
     pub const KINDS: u8 = 34;
+    /// 不明の牌（手入力で分からなかった牌。表記は `?`）。点数計算には使えない
+    pub const UNKNOWN: Tile = Tile {
+        kind: 34,
+        red: false,
+    };
 
     pub fn new(kind: u8) -> Self {
         assert!(kind < Self::KINDS, "牌の種類は0〜33");
@@ -70,6 +75,10 @@ impl Tile {
 
     pub fn kind(self) -> u8 {
         self.kind
+    }
+    /// 不明の牌か
+    pub fn is_unknown(self) -> bool {
+        self.kind >= Self::KINDS
     }
     pub fn is_red(self) -> bool {
         self.red
@@ -118,6 +127,9 @@ impl Tile {
 
     /// 日本語の表示名（例: 一萬, 赤五筒, 東）。
     pub fn name_ja(self) -> String {
+        if self.is_unknown() {
+            return "不明".into();
+        }
         if self.is_honor() {
             return HONOR_JA[(self.kind - 27) as usize].to_string();
         }
@@ -139,6 +151,9 @@ impl Tile {
 
 impl fmt::Display for Tile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_unknown() {
+            return write!(f, "?");
+        }
         let n = if self.red { 0 } else { self.number() };
         write!(f, "{n}{}", self.suit().char())
     }
@@ -158,6 +173,9 @@ impl FromStr for Tile {
     type Err = ParseTileError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let err = || ParseTileError(s.to_string());
+        if s.trim() == "?" {
+            return Ok(Tile::UNKNOWN);
+        }
         let b = s.trim().as_bytes();
         if b.len() != 2 || !b[0].is_ascii_digit() {
             return Err(err());

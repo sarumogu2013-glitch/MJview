@@ -88,7 +88,43 @@ pub enum WinReq {
     OutputSize1080,
     OperatorFullscreen,
     OperatorWindowed,
+    /// 配信画面（出力ウィンドウ）を開く（閉じたあとに開き直す）
+    OpenOutput,
     Quit,
+}
+
+/// 出力ウィンドウを枠つきで出すか（`--output-borderless` なら枠なし）
+#[derive(Resource, Clone, Copy)]
+pub struct OutputDecor(pub bool);
+
+/// 配信画面（出力ウィンドウ）とそのカメラを出す。閉じたら [`crate::output::cleanup_closed_output`] が片付ける
+pub fn spawn_output(commands: &mut Commands, decorations: bool) {
+    use bevy::camera::RenderTarget;
+    use bevy::window::{PresentMode, WindowRef, WindowResolution};
+    let out = commands
+        .spawn(Window {
+            title: "JanScope 出力".into(),
+            resolution: WindowResolution::new(1920, 1080),
+            // 起動時は普通のウィンドウ。大きさを変えられる（Windows のスナップ・最大化）。
+            // 中身は 1920×1080 の配置を窓の大きさに合わせて縮める。全画面は操作ウィンドウのツールバー・メニューから
+            decorations,
+            resizable: true,
+            position: WindowPosition::Automatic,
+            present_mode: PresentMode::AutoVsync,
+            ..default()
+        })
+        .insert(OutputWindow)
+        .id();
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            ..default()
+        },
+        RenderTarget::Window(WindowRef::Entity(out)),
+        crate::output::OutputCamera,
+        Fit1080,
+    ));
 }
 
 /// ウィンドウの様子（毎フレーム [`apply_window_ctl`] が書く）と、画面からの要求
@@ -120,6 +156,18 @@ impl WindowCtl {
 
     /// ツールバーの全画面ボタン（出力ウィンドウのモニター選択つき）と、操作ウィンドウの全画面ボタン
     pub fn toolbar(&mut self, ui: &mut egui::Ui) {
+        if !self.has_output {
+            if ui
+                .button("配信画面を開く")
+                .on_hover_text(
+                    "配信画面（出力ウィンドウ）を開きます。閉じても、ここからまた開けます",
+                )
+                .clicked()
+            {
+                self.request(WinReq::OpenOutput);
+            }
+            ui.separator();
+        }
         if self.has_output {
             ui.label("出力");
             if self.output_fullscreen {
@@ -188,6 +236,10 @@ impl WindowCtl {
 
     /// メニューバーの「表示」の中身
     pub fn view_menu(&mut self, ui: &mut egui::Ui) {
+        if !self.has_output && ui.button("配信画面を開く").clicked() {
+            self.request(WinReq::OpenOutput);
+            ui.close();
+        }
         if self.has_output {
             if self.output_fullscreen {
                 if ui.button("出力ウィンドウをウィンドウに戻す").clicked() {
@@ -265,7 +317,10 @@ fn image_from_png(png: &[u8]) -> Result<(u32, u32, Vec<u8>), ()> {
 }
 
 /// 要求どおりにウィンドウを切り替え、様子を書き戻す。F11 で操作ウィンドウ（選手用画面ではその画面）の全画面を切り替える
+#[allow(clippy::too_many_arguments)]
 pub fn apply_window_ctl(
+    mut commands: Commands,
+    decor: Option<Res<OutputDecor>>,
     ui: Option<ResMut<crate::operator::OperatorUi>>,
     mut primary: Query<&mut Window, (With<PrimaryWindow>, Without<OutputWindow>)>,
     mut output: Query<&mut Window, (With<OutputWindow>, Without<PrimaryWindow>)>,
@@ -324,6 +379,11 @@ pub fn apply_window_ctl(
             WinReq::OperatorWindowed => {
                 if let Ok(mut w) = primary.single_mut() {
                     w.mode = WindowMode::Windowed;
+                }
+            }
+            WinReq::OpenOutput => {
+                if output.is_empty() {
+                    spawn_output(&mut commands, decor.as_deref().is_none_or(|d| d.0));
                 }
             }
             WinReq::Quit => {

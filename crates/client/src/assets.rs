@@ -56,6 +56,9 @@ pub struct TileImages {
 
 impl TileImages {
     pub fn get(&self, t: Tile) -> Handle<Image> {
+        if t.is_unknown() {
+            return self.back.clone();
+        }
         if t.is_red() {
             let i = match t.suit() {
                 Suit::Man => 0,

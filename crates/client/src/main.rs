@@ -29,11 +29,8 @@ mod ui_kit;
 mod update;
 mod windows;
 
-use bevy::camera::RenderTarget;
 use bevy::prelude::*;
-use bevy::window::{
-    MonitorSelection, PresentMode, WindowMode, WindowPosition, WindowRef, WindowResolution,
-};
+use bevy::window::{MonitorSelection, PresentMode, WindowMode, WindowPosition, WindowResolution};
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
 use janscope_core::protocol::{ClientRole, DEFAULT_PORT};
 
@@ -252,6 +249,7 @@ fn main() {
             .add_systems(
                 Update,
                 (
+                    output::cleanup_closed_output,
                     program::release,
                     replay::tick_replay,
                     scenes::update_scenes,
@@ -393,30 +391,8 @@ fn setup_operator_windows(
 ) {
     egui.auto_create_primary_context = false;
     commands.spawn((Camera2d, PrimaryEguiContext));
+    commands.insert_resource(windows::OutputDecor(decorations));
     if role == ClientRole::Broadcast {
-        let out = commands
-            .spawn(Window {
-                title: "JanScope 出力".into(),
-                resolution: WindowResolution::new(1920, 1080),
-                // 起動時は普通のウィンドウ。大きさを変えられる（Windows のスナップ・最大化）。
-                // 中身は 1920×1080 の配置を窓の大きさに合わせて縮める。全画面は操作ウィンドウのツールバー・メニューから
-                decorations,
-                resizable: true,
-                position: WindowPosition::Automatic,
-                present_mode: PresentMode::AutoVsync,
-                ..default()
-            })
-            .insert(windows::OutputWindow)
-            .id();
-        commands.spawn((
-            Camera2d,
-            Camera {
-                order: 1,
-                ..default()
-            },
-            RenderTarget::Window(WindowRef::Entity(out)),
-            output::OutputCamera,
-            windows::Fit1080,
-        ));
+        windows::spawn_output(&mut commands, decorations);
     }
 }

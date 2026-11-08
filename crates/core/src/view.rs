@@ -18,6 +18,9 @@ pub struct FullView {
     /// 大会通算（配信・入力担当ロールだけに送る）
     #[serde(default)]
     pub tournament: crate::tournament::Tournament,
+    /// 今の局の操作（局の開始のあとから。入力担当が遡って直すのに使う）
+    #[serde(default)]
+    pub hand_log: Vec<crate::state::Action>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

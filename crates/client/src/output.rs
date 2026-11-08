@@ -51,6 +51,25 @@ pub struct OutputDirty {
     last_key: String,
 }
 
+/// 配信画面（出力ウィンドウ）が閉じられたら、カメラと中身を片付ける（「配信画面を開く」でまた出す）
+pub fn cleanup_closed_output(
+    mut commands: Commands,
+    windows: Query<(), With<crate::windows::OutputWindow>>,
+    cams: Query<Entity, With<OutputCamera>>,
+    roots: Query<Entity, With<OutputRoot>>,
+    curtains: Query<Entity, With<crate::scenes::CurtainNode>>,
+    mut dirty: ResMut<OutputDirty>,
+) {
+    if !windows.is_empty() || cams.is_empty() {
+        return;
+    }
+    for e in cams.iter().chain(roots.iter()).chain(curtains.iter()) {
+        commands.entity(e).despawn();
+    }
+    // 開き直したら描き直す
+    dirty.last_key.clear();
+}
+
 /// 演出の出来事を受けて、選手画面・アガリ演出を切り替える。
 pub fn handle_overlays(
     cfg: Res<crate::config::ClientConfig>,

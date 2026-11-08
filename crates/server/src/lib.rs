@@ -100,7 +100,24 @@ fn full_view(sh: &Shared) -> FullView {
         can_undo: sh.log.can_undo(),
         can_redo: sh.log.can_redo(),
         tournament: sh.tournament.clone(),
+        hand_log: hand_log(sh.log.actions()),
     }
+}
+
+/// 最後の局の開始のあとの操作
+fn hand_log(done: &[janscope_core::log::Stamped]) -> Vec<janscope_core::state::Action> {
+    use janscope_core::state::Action;
+    let start = done
+        .iter()
+        .rposition(|a| {
+            matches!(
+                a.action,
+                Action::StartHand { .. } | Action::StartGame { .. }
+            )
+        })
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    done[start..].iter().map(|a| a.action.clone()).collect()
 }
 
 impl Shared {

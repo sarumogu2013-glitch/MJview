@@ -55,6 +55,20 @@ pub fn preview_win(state: &TableState, input: &WinInput) -> Result<WinScore, Eng
 }
 
 fn score_in_state(state: &TableState, input: &WinInput) -> Result<WinScore, EngineError> {
+    let tiles = input
+        .closed
+        .iter()
+        .chain(input.melds.iter().flat_map(|m| &m.tiles))
+        .chain(std::iter::once(&input.win_tile))
+        .chain(&input.ura_indicators);
+    if tiles.clone().any(|t| t.is_unknown()) {
+        return invalid(
+            "不明の牌があるので計算できません（アガリ入力の欄で正しい牌にしてください）",
+        );
+    }
+    if state.dora_indicators.iter().any(|t| t.is_unknown()) {
+        return invalid("ドラ表示牌に不明の牌があります（ドラ表示牌を直してください）");
+    }
     let mut inp = input.clone();
     if state.phase == Phase::InHand && state.wall_remaining == 0 && !inp.rinshan {
         inp.haitei = true;
@@ -134,8 +148,13 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
                 seat.drawn = None;
                 seat.river.clear();
                 seat.hand_known = false;
+                seat.ippatsu = false;
+                seat.double_riichi = false;
             }
             s.turn = Turn::None;
+            s.calls_this_hand = false;
+            s.rinshan_drawn = false;
+            s.kan_dora_pending = 0;
             s.phase = Phase::InHand;
             Ok(vec![Overlay::HandStarted])
         }
@@ -203,6 +222,10 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
             }
             if !tiles.is_empty() {
                 crate::hands::kan(s, *seat, *kind, tiles)?;
+                // 大明槓・加槓の新ドラは打牌のあとにめくる
+                if *kind != KanKind::Ankan && new_dora_indicator.is_none() {
+                    s.kan_dora_pending += 1;
+                }
             }
             s.kans_this_hand += 1;
             s.wall_remaining = s.wall_remaining.saturating_sub(1);
@@ -227,6 +250,7 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
         Discard { seat, tile, riichi } => {
             need_phase(s, &[Phase::InHand], "打牌")?;
             if *riichi {
+                let first = s.seats[seat.index()].river.is_empty() && !s.calls_this_hand;
                 let st = &mut s.seats[seat.index()];
                 if st.riichi {
                     return invalid(format!("{}はすでに立直しています", st.player.name));
@@ -234,6 +258,7 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
                 st.riichi = true;
                 st.score -= 1_000;
                 s.kyotaku += 1;
+                st.double_riichi = first;
             }
             crate::hands::discard(s, *seat, *tile, *riichi)?;
             Ok(if *riichi {
@@ -258,6 +283,8 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
             if tiles.len() > 5 {
                 return invalid("ドラ表示牌は5枚までです");
             }
+            let added = tiles.len().saturating_sub(s.dora_indicators.len());
+            s.kan_dora_pending = s.kan_dora_pending.saturating_sub(added as u8);
             s.dora_indicators = tiles.clone();
             Ok(vec![])
         }

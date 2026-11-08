@@ -41,6 +41,9 @@ pub fn check_counts(s: &TableState) -> Result<(), EngineError> {
     let mut n = [0u8; 34];
     let mut red = [0u8; 3];
     let mut add = |t: Tile| {
+        if t.is_unknown() {
+            return;
+        }
         n[t.kind() as usize] += 1;
         if t.is_red() {
             red[(t.kind() / 9) as usize] += 1;
@@ -56,6 +59,7 @@ pub fn check_counts(s: &TableState) -> Result<(), EngineError> {
             .for_each(|r| add(r.tile));
         st.melds.iter().flat_map(|m| &m.tiles).for_each(|t| add(*t));
     }
+    s.dora_indicators.iter().for_each(|t| add(*t));
     if let Some(k) = n.iter().position(|c| *c > 4) {
         return invalid(format!(
             "{}が5枚以上になります（入力を確かめてください）",
@@ -142,6 +146,7 @@ pub fn tsumo(s: &mut TableState, seat: SeatId, tile: Tile) -> Result<(), EngineE
         s.wall_remaining -= 1;
     }
     s.seats[seat.index()].drawn = Some(tile);
+    s.rinshan_drawn = rinshan;
     check_counts(s)?;
     s.turn = Turn::Discard { seat };
     Ok(())
@@ -161,6 +166,8 @@ pub fn discard(
     if st.tile_count() != 14 {
         return invalid(format!("{who}は打牌の前にツモか鳴きが必要です"));
     }
+    // 一発は、立直のあと自分の次の打牌まで
+    st.ippatsu = riichi;
     let tsumogiri = st.drawn == Some(tile);
     if tsumogiri {
         st.drawn = None;
@@ -180,7 +187,16 @@ pub fn discard(
         tsumogiri,
     });
     s.turn = Turn::AfterDiscard { seat };
+    s.rinshan_drawn = false;
     Ok(())
+}
+
+/// 鳴き・槓のあと（一発・1巡目の役が消える）
+fn broke_turn(s: &mut TableState) {
+    s.calls_this_hand = true;
+    for st in &mut s.seats {
+        st.ippatsu = false;
+    }
 }
 
 /// 直前の打牌（鳴ける牌）。
@@ -268,6 +284,7 @@ pub fn call(
         from: Some(from),
     });
     take_called(s)?;
+    broke_turn(s);
     s.turn = Turn::Discard { seat };
     Ok(())
 }
@@ -357,6 +374,7 @@ pub fn kan(
         }
     }
     check_counts(s)?;
+    broke_turn(s);
     s.turn = Turn::Tsumo {
         seat,
         rinshan: true,
@@ -473,13 +491,14 @@ pub fn win_input(s: &TableState, winner: SeatId, loser: Option<SeatId>) -> Optio
         closed,
         melds: st.melds.clone(),
         win_tile,
-        riichi: st.riichi,
-        double_riichi: false,
-        ippatsu: false,
+        riichi: st.riichi && !st.double_riichi,
+        double_riichi: st.double_riichi,
+        ippatsu: st.ippatsu,
         haitei: false,
-        rinshan: false,
+        rinshan: loser.is_none() && s.rinshan_drawn,
         chankan: false,
-        tenhou: false,
+        // 天和・地和: 鳴きのない1巡目で、まだ打牌していないツモアガリ
+        tenhou: loser.is_none() && st.river.is_empty() && !s.calls_this_hand,
         ura_indicators: vec![],
         pao: None,
     })
