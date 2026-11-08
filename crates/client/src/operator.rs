@@ -451,141 +451,156 @@ pub fn operator_ui(
     egui::Panel::left("status")
         .default_size(360.0)
         .show(&mut root, |ui| {
-            ui.heading(match state.phase {
-                Phase::Setup => "対局前".into(),
-                Phase::GameOver => "終局".into(),
-                _ => format!(
-                    "{} {}本場 供託{}",
-                    state.round_label(),
-                    state.honba,
-                    state.kyotaku
-                ),
-            });
-            egui::Grid::new("scores").striped(true).show(ui, |ui| {
-                for seat in SeatId::ALL {
-                    let st = &state.seats[seat.index()];
-                    ui.label(format!(
-                        "{}{}",
-                        state.seat_wind(seat).name_ja(),
-                        if state.dealer() == seat { "親" } else { "" }
-                    ));
-                    ui.label(&st.player.name);
-                    ui.label(egui::RichText::new(fmt_pts(st.score)).strong());
-                    let d = state.last_deltas[seat.index()];
-                    ui.label(if d != 0 {
-                        crate::ui_kit::delta_text(d)
-                    } else {
-                        String::new()
+            // 隠している欄を開くと下が見えなくなるので、左側はスクロールできるようにする
+            egui::ScrollArea::vertical()
+                .id_salt("status_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading(match state.phase {
+                        Phase::Setup => "対局前".into(),
+                        Phase::GameOver => "終局".into(),
+                        _ => format!(
+                            "{} {}本場 供託{}",
+                            state.round_label(),
+                            state.honba,
+                            state.kyotaku
+                        ),
                     });
-                    ui.label(if st.riichi { "リーチ" } else { "" });
-                    ui.end_row();
-                }
-            });
-            if state.phase == Phase::InHand {
-                ui.label(
-                    egui::RichText::new(format!("残り {}", state.wall_remaining))
-                        .size(28.0)
-                        .strong(),
-                );
-            }
-            if let Some(fr) = &state.final_results {
-                ui.separator();
-                ui.heading("最終結果");
-                for r in fr {
-                    ui.label(format!(
-                        "{}位 {} {} ({:+.1})",
-                        r.rank,
-                        state.seats[r.seat.index()].player.name,
-                        fmt_pts(r.score),
-                        r.points
-                    ));
-                }
-            }
-            ui.separator();
-            ui.label("選手画面（F1〜F4 で手動、F5 で自動）");
-            ui.horizontal(|ui| {
-                for seat in SeatId::ALL {
-                    let sel = face.current == seat && !matches!(face.sw.mode(), FaceMode::Auto);
-                    if ui
-                        .selectable_label(
-                            sel,
-                            format!("F{} {}", seat.0 + 1, state.seats[seat.index()].player.name),
-                        )
-                        .clicked()
-                    {
-                        face.sw.manual(seat, time.elapsed_secs_f64());
-                    }
-                }
-                if ui
-                    .selectable_label(matches!(face.sw.mode(), FaceMode::Auto), "自動")
-                    .clicked()
-                {
-                    face.sw.auto(time.elapsed_secs_f64());
-                }
-            });
-            let now = time.elapsed_secs_f64();
-            let mode = match face.sw.mode() {
-                FaceMode::Auto => "自動".to_string(),
-                FaceMode::TempManual { .. } => "一時手動".to_string(),
-                FaceMode::LockedManual { .. } => "手動固定".to_string(),
-            };
-            let rest = face
-                .sw
-                .remaining(now)
-                .map(|r| format!("、次の切替まで {:.0}秒", r))
-                .unwrap_or_default();
-            ui.label(format!(
-                "いま: {} {}（{mode}{rest}）",
-                face.current.label(),
-                state.seats[face.current.index()].player.name
-            ));
-            face_settings_panel(ui, u, &mut cfg, &mut face);
-            if !win_show.records.is_empty() && ui.button("アガリ演出を閉じる").clicked() {
-                win_show.records.clear();
-            }
-            ui.separator();
-            if let Some(t) = table.full.as_ref().map(|f| f.tournament.clone()) {
-                tournament_panel(ui, u, &net, &t);
-            }
-            ui.separator();
-            ui.collapsing("局の履歴", |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(260.0)
-                    .show(ui, |ui| {
-                        for h in state.history.iter().rev() {
-                            let what = match &h.outcome {
-                                janscope_core::state::HandOutcome::Win(ws) => ws
-                                    .iter()
-                                    .map(|w| {
-                                        format!(
-                                            "{} {} {}",
-                                            state.seats[w.input.winner.index()].player.name,
-                                            w.score.han_fu_text(),
-                                            w.score.points_text()
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(" / "),
-                                janscope_core::state::HandOutcome::Draw { .. } => "流局".into(),
-                                janscope_core::state::HandOutcome::Adjust { reason } => {
-                                    format!("調整: {reason}")
-                                }
-                            };
+                    egui::Grid::new("scores").striped(true).show(ui, |ui| {
+                        for seat in SeatId::ALL {
+                            let st = &state.seats[seat.index()];
                             ui.label(format!(
-                                "{}{}局{}本場 {}",
-                                h.wind.name_ja(),
-                                h.number,
-                                h.honba,
-                                what
+                                "{}{}",
+                                state.seat_wind(seat).name_ja(),
+                                if state.dealer() == seat { "親" } else { "" }
                             ));
+                            ui.label(&st.player.name);
+                            ui.label(egui::RichText::new(fmt_pts(st.score)).strong());
+                            let d = state.last_deltas[seat.index()];
+                            ui.label(if d != 0 {
+                                crate::ui_kit::delta_text(d)
+                            } else {
+                                String::new()
+                            });
+                            ui.label(if st.riichi { "リーチ" } else { "" });
+                            ui.end_row();
                         }
                     });
-            });
+                    if state.phase == Phase::InHand {
+                        ui.label(
+                            egui::RichText::new(format!("残り {}", state.wall_remaining))
+                                .size(28.0)
+                                .strong(),
+                        );
+                    }
+                    if let Some(fr) = &state.final_results {
+                        ui.separator();
+                        ui.heading("最終結果");
+                        for r in fr {
+                            ui.label(format!(
+                                "{}位 {} {} ({:+.1})",
+                                r.rank,
+                                state.seats[r.seat.index()].player.name,
+                                fmt_pts(r.score),
+                                r.points
+                            ));
+                        }
+                    }
+                    ui.separator();
+                    ui.label("選手画面（F1〜F4 で手動、F5 で自動）");
+                    ui.horizontal(|ui| {
+                        for seat in SeatId::ALL {
+                            let sel =
+                                face.current == seat && !matches!(face.sw.mode(), FaceMode::Auto);
+                            if ui
+                                .selectable_label(
+                                    sel,
+                                    format!(
+                                        "F{} {}",
+                                        seat.0 + 1,
+                                        state.seats[seat.index()].player.name
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                face.sw.manual(seat, time.elapsed_secs_f64());
+                            }
+                        }
+                        if ui
+                            .selectable_label(matches!(face.sw.mode(), FaceMode::Auto), "自動")
+                            .clicked()
+                        {
+                            face.sw.auto(time.elapsed_secs_f64());
+                        }
+                    });
+                    let now = time.elapsed_secs_f64();
+                    let mode = match face.sw.mode() {
+                        FaceMode::Auto => "自動".to_string(),
+                        FaceMode::TempManual { .. } => "一時手動".to_string(),
+                        FaceMode::LockedManual { .. } => "手動固定".to_string(),
+                    };
+                    let rest = face
+                        .sw
+                        .remaining(now)
+                        .map(|r| format!("、次の切替まで {:.0}秒", r))
+                        .unwrap_or_default();
+                    ui.label(format!(
+                        "いま: {} {}（{mode}{rest}）",
+                        face.current.label(),
+                        state.seats[face.current.index()].player.name
+                    ));
+                    face_settings_panel(ui, u, &mut cfg, &mut face);
+                    if !win_show.records.is_empty() && ui.button("アガリ演出を閉じる").clicked()
+                    {
+                        win_show.records.clear();
+                    }
+                    ui.separator();
+                    if let Some(t) = table.full.as_ref().map(|f| f.tournament.clone()) {
+                        tournament_panel(ui, u, &net, &t);
+                    }
+                    ui.separator();
+                    ui.collapsing("局の履歴", |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(260.0)
+                            .show(ui, |ui| {
+                                for h in state.history.iter().rev() {
+                                    let what = match &h.outcome {
+                                        janscope_core::state::HandOutcome::Win(ws) => ws
+                                            .iter()
+                                            .map(|w| {
+                                                format!(
+                                                    "{} {} {}",
+                                                    state.seats[w.input.winner.index()].player.name,
+                                                    w.score.han_fu_text(),
+                                                    w.score.points_text()
+                                                )
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join(" / "),
+                                        janscope_core::state::HandOutcome::Draw { .. } => {
+                                            "流局".into()
+                                        }
+                                        janscope_core::state::HandOutcome::Adjust { reason } => {
+                                            format!("調整: {reason}")
+                                        }
+                                    };
+                                    ui.label(format!(
+                                        "{}{}局{}本場 {}",
+                                        h.wind.name_ja(),
+                                        h.number,
+                                        h.honba,
+                                        what
+                                    ));
+                                }
+                            });
+                    });
+                });
         });
 
     let now = time.elapsed_secs_f64();
     egui::CentralPanel::default().show(&mut root, |ui| {
-        if role.0 == janscope_core::protocol::ClientRole::Broadcast {
+        // 配信のメインは入力側（配信画面は、この画面のデータを写す）。シーン・牌譜再生も入力担当で操作する
+        if role.0 != janscope_core::protocol::ClientRole::PlayerScreen {
             scene_panel(ui, u, &mut scenes, &state, now);
             replay_panel(ui, &mut replay, &cfg.prefs.replay);
             ui.separator();

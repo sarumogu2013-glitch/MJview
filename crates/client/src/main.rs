@@ -53,6 +53,10 @@ struct Args {
     output_borderless: bool,
     /// ランチャー（JanScope.exe）のウィンドウに操作ウィンドウを埋め込む
     embed: bool,
+    /// 起動時に配信画面（出力ウィンドウ）を開く（broadcast ロールはいつも開く）
+    output: bool,
+    /// ランチャーからの指示を書くファイル（「配信画面を開く」など）
+    command_file: Option<String>,
 }
 
 fn usage() -> ! {
@@ -63,6 +67,8 @@ fn usage() -> ! {
          \x20 --monitor <番号>                全画面にするモニター（0から）\n\
          \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）\n\
          \x20 --embed                        操作ウィンドウをランチャー（JanScope.exe）に埋め込む（ランチャーが付ける）\n\
+         \x20 --output                       起動時に配信画面（出力ウィンドウ）を開く（入力担当でも）\n\
+         \x20 --command-file <ファイル>       ランチャーからの指示（配信画面を開く）を読むファイル\n\
          \x20 --dummy-server                 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ（--server・--code は不要）\n\
          \x20 --dummy-file <ファイル>         機能の確認用: 取り込んだ対局（雀魂の牌譜など）で --dummy-server と同じことをする",
         janscope_core::VERSION
@@ -83,6 +89,8 @@ fn parse_args() -> Args {
         monitor: None,
         output_borderless: false,
         embed: false,
+        output: false,
+        command_file: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -110,6 +118,8 @@ fn parse_args() -> Args {
             "--output-decorations" => {}
             "--output-borderless" => a.output_borderless = true,
             "--embed" => a.embed = true,
+            "--output" => a.output = true,
+            "--command-file" => a.command_file = Some(it.next().unwrap_or_else(|| usage())),
             "-h" | "--help" => usage(),
             _ => usage(),
         }
@@ -243,7 +253,7 @@ fn main() {
             .add_systems(
                 Startup,
                 move |c: Commands, s: ResMut<EguiGlobalSettings>| {
-                    setup_operator_windows(c, s, role, !args.output_borderless)
+                    setup_operator_windows(c, s, role, !args.output_borderless, args.output)
                 },
             )
             .add_systems(
@@ -259,6 +269,10 @@ fn main() {
                 )
                     .chain(),
             );
+        app.insert_resource(windows::CommandFile(
+            args.command_file.clone().map(std::path::PathBuf::from),
+        ))
+        .add_systems(Update, windows::read_command_file);
         app.insert_resource(settings::Library::load())
             .init_resource::<settings::SettingsUi>()
             .add_systems(Startup, update::startup_check)
@@ -388,11 +402,12 @@ fn setup_operator_windows(
     mut egui: ResMut<EguiGlobalSettings>,
     role: ClientRole,
     decorations: bool,
+    open_output: bool,
 ) {
     egui.auto_create_primary_context = false;
     commands.spawn((Camera2d, PrimaryEguiContext));
     commands.insert_resource(windows::OutputDecor(decorations));
-    if role == ClientRole::Broadcast {
+    if role == ClientRole::Broadcast || open_output {
         windows::spawn_output(&mut commands, decorations);
     }
 }

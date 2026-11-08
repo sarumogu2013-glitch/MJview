@@ -93,6 +93,34 @@ pub enum WinReq {
     Quit,
 }
 
+/// ランチャーからの指示のファイル（`--command-file`）
+#[derive(Resource)]
+pub struct CommandFile(pub Option<std::path::PathBuf>);
+
+/// ランチャーからの指示を読む（0.5秒ごと）。読んだらファイルは消す。今は「open-output」（配信画面を開く）だけ
+pub fn read_command_file(
+    file: Res<CommandFile>,
+    ui: Option<ResMut<crate::operator::OperatorUi>>,
+    time: Res<Time>,
+    mut next: Local<f64>,
+) {
+    let (Some(path), Some(mut ui)) = (&file.0, ui) else {
+        return;
+    };
+    let now = time.elapsed_secs_f64();
+    if now < *next {
+        return;
+    }
+    *next = now + 0.5;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let _ = std::fs::remove_file(path);
+    if text.lines().any(|l| l.trim() == "open-output") {
+        ui.windows.request(WinReq::OpenOutput);
+    }
+}
+
 /// 出力ウィンドウを枠つきで出すか（`--output-borderless` なら枠なし）
 #[derive(Resource, Clone, Copy)]
 pub struct OutputDecor(pub bool);
@@ -103,7 +131,8 @@ pub fn spawn_output(commands: &mut Commands, decorations: bool) {
     use bevy::window::{PresentMode, WindowRef, WindowResolution};
     let out = commands
         .spawn(Window {
-            title: "JanScope 出力".into(),
+            // ランチャーはこの題名で配信画面を見つける（開いているか・閉じる）
+            title: "JanScope 配信画面".into(),
             resolution: WindowResolution::new(1920, 1080),
             // 起動時は普通のウィンドウ。大きさを変えられる（Windows のスナップ・最大化）。
             // 中身は 1920×1080 の配置を窓の大きさに合わせて縮める。全画面は操作ウィンドウのツールバー・メニューから

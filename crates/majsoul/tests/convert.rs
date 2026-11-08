@@ -160,3 +160,62 @@ fn keeps_names_when_asked_and_rejects_sanma() {
     h["config"]["mode"]["mode"] = json!(12);
     assert!(convert(&h, &game(), true).unwrap_err().contains("三人"));
 }
+
+/// 配牌（tiles0〜3）があれば、ツモ・打牌・鳴きも1枚ずつ入る
+#[test]
+fn tiles_are_tracked() {
+    let t = |s: &str| -> Vec<serde_json::Value> {
+        janscope_core::tile::parse_tiles(s)
+            .unwrap()
+            .iter()
+            .map(|x| json!(x.to_string()))
+            .collect()
+    };
+    let recs = vec![
+        rec(
+            "RecordNewRound",
+            json!({"chang": 0, "ju": 0, "ben": 0, "liqibang": 0,
+            "scores": [25000, 25000, 25000, 25000], "doras": ["1s"], "left_tile_count": 69,
+            "tiles0": t("123m456p789s11225z"), "tiles1": t("777z11m234p567s99s"),
+            "tiles2": t("456m11p23s666z333z"), "tiles3": t("789m999p111s4444z")}),
+        ),
+        // 親が 白 を打つ → 席3 のツモ… ではなく、席1 のツモ 9m・打牌 9m
+        rec("RecordDiscardTile", json!({"seat": 0, "tile": "5z"})),
+        rec(
+            "RecordDealTile",
+            json!({"seat": 1, "tile": "9m", "left_tile_count": 68}),
+        ),
+        rec("RecordDiscardTile", json!({"seat": 1, "tile": "9m"})),
+        rec(
+            "RecordDealTile",
+            json!({"seat": 2, "tile": "1z", "left_tile_count": 67}),
+        ),
+        rec("RecordDiscardTile", json!({"seat": 2, "tile": "1z"})),
+        // 席0 が 東 をポン（自分の2枚 + 席2 の1枚）
+        rec(
+            "RecordChiPengGang",
+            json!({"seat": 0, "type": 1, "tiles": ["1z","1z","1z"], "froms": [0, 0, 2]}),
+        ),
+        rec("RecordDiscardTile", json!({"seat": 0, "tile": "2z"})),
+    ];
+    let imp = convert(&head(), &recs, true).unwrap();
+    let mut s = TableState::default();
+    let mut seen_call = false;
+    for a in &imp.actions {
+        if matches!(a, Action::Call { .. }) {
+            seen_call = true;
+        }
+        // 最後の局は途中で終わるので、流局（途中流局）までを当てる
+        if apply(&mut s, a).is_err() {
+            break;
+        }
+        if s.seats[2].river.len() == 1 && s.seats[0].melds.len() == 1 && s.seats[0].river.len() == 2
+        {
+            break;
+        }
+    }
+    assert!(seen_call, "ポンが操作に入っていない: {:?}", imp.notes);
+    assert_eq!(s.seats[0].river.len(), 2, "{:?}", imp.notes);
+    assert!(s.seats[2].river[0].called);
+    assert_eq!(s.seats[0].melds.len(), 1);
+}

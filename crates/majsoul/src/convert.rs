@@ -3,7 +3,8 @@
 //! - 局の始めごとに、点数・局・本場・供託を雀魂の値に合わせる（ルールの違いで食い違っても、次の局からは正しい）
 //! - アガリ・流局は JanScope の操作で当て、点数が雀魂と違えば差を「手動調整」で合わせる。
 //!   JanScope の操作として当てられないとき（ルールの違いなど）は、途中流局で局を終えて点数を合わせる
-//! - 打牌の1枚1枚は持たない（JanScope の卓状態は河を持たない）。ツモごとに残り牌数、リーチ、槓、ドラ表示牌を入れる
+//! - 配牌・ツモ・打牌・鳴き・槓も1枚ずつ入れる（手牌と河が配信画面に出る）。合わなくなったら、その局はそこから先を
+//!   残り牌数・リーチ・槓・ドラ表示牌だけで進める
 //! - 名前は既定で「選手A〜D」にする（ほかの人の名前を入れないため）
 
 use janscope_core::engine::apply;
@@ -97,6 +98,8 @@ struct Conv {
     last_discarder: Option<u8>,
     last_kakan: Option<u8>,
     dora: Vec<Tile>,
+    /// この局の手牌・河を追えている
+    track: bool,
 }
 
 impl Conv {
@@ -129,6 +132,32 @@ impl Conv {
                 deltas: d,
                 reason: format!("雀魂の点数に合わせる（{why}）"),
             });
+        }
+    }
+    /// 手牌・河の操作を当てる。合わなければ、この局は手牌・河を追うのをやめる
+    fn tile_act(&mut self, a: Action) -> bool {
+        if !self.track {
+            return false;
+        }
+        let label = format!("{a:?}");
+        match self.try_act(a) {
+            Ok(()) => true,
+            Err(e) => {
+                self.track = false;
+                self.notes.push(format!(
+                    "手牌・河が合わなくなったので、この局の残りは手牌・河なしで進めます: {} （{e}）",
+                    label.chars().take(60).collect::<String>()
+                ));
+                false
+            }
+        }
+    }
+    /// 雀魂の残り牌数に合わせる
+    fn sync_wall(&mut self, rec: &Value) {
+        let left = int(rec, "left_tile_count");
+        if left >= 0 && rec.get("left_tile_count").is_some() && self.s.wall_remaining != left as u32
+        {
+            self.act(Action::SetWallRemaining { value: left as u32 });
         }
     }
     fn sync_dora(&mut self, rec: &Value) {
@@ -273,6 +302,7 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
         last_discarder: None,
         last_kakan: None,
         dora: vec![],
+        track: false,
     };
     // 雀魂の席 0 が起家。JanScope の席 A〜D をそのまま席 0〜3 にする
     c.try_act(Action::StartGame {
@@ -322,28 +352,54 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
                     c.dora = d.clone();
                     c.act(Action::SetDora { tiles: d });
                 }
+                // 配牌（親は14枚。14枚目は最初のツモ）
+                c.track = true;
+                let dealer = int(b, "ju").clamp(0, 3) as u8;
+                for i in 0..4u8 {
+                    let seat = (dealer + i) % 4;
+                    let mut ts = match tiles(arr(b, &format!("tiles{seat}"))) {
+                        Ok(t) if t.len() == 13 || t.len() == 14 => t,
+                        _ => {
+                            c.track = false;
+                            break;
+                        }
+                    };
+                    let drawn = if ts.len() == 14 { ts.pop() } else { None };
+                    if !c.tile_act(Action::SetHand {
+                        seat: SeatId(seat),
+                        tiles: ts,
+                        drawn,
+                    }) {
+                        break;
+                    }
+                }
                 let left = int(b, "left_tile_count");
-                if left > 0 {
+                if left > 0 && c.s.wall_remaining != left as u32 {
                     c.act(Action::SetWallRemaining { value: left as u32 });
                 }
                 c.last_discarder = None;
                 c.last_kakan = None;
             }
             "RecordDealTile" => {
-                let left = int(b, "left_tile_count");
-                if left >= 0
-                    && b.get("left_tile_count").is_some()
-                    && c.s.wall_remaining != left as u32
-                {
-                    c.act(Action::SetWallRemaining { value: left as u32 });
+                let seat = SeatId(int(b, "seat") as u8);
+                if let Ok(t) = tile(string(b, "tile")) {
+                    c.tile_act(Action::Tsumo { seat, tile: t });
                 }
+                c.sync_wall(b);
                 c.sync_dora(b);
             }
             "RecordDiscardTile" => {
                 let seat = int(b, "seat") as u8;
-                if (boolean(b, "is_liqi") || boolean(b, "is_wliqi"))
-                    && !c.s.seats[seat as usize].riichi
-                {
+                let riichi = boolean(b, "is_liqi") || boolean(b, "is_wliqi");
+                let done = match tile(string(b, "tile")) {
+                    Ok(t) if c.track => c.tile_act(Action::Discard {
+                        seat: SeatId(seat),
+                        tile: t,
+                        riichi: riichi && !c.s.seats[seat as usize].riichi,
+                    }),
+                    _ => false,
+                };
+                if !done && riichi && !c.s.seats[seat as usize].riichi {
                     c.act(Action::Riichi { seat: SeatId(seat) });
                 }
                 c.last_discarder = Some(seat);
@@ -351,8 +407,42 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
                 c.sync_dora(b);
             }
             "RecordChiPengGang" => {
-                // 2 = 大明槓（チー・ポンは操作にしない。アガリのときの副露は牌譜から入れる）
-                if int(b, "type") == 2 {
+                // 0 = チー、1 = ポン、2 = 大明槓。tiles は副露の牌、froms はそれぞれの牌を出した席
+                let seat = int(b, "seat") as u8;
+                let ts = tiles(arr(b, "tiles")).unwrap_or_default();
+                let froms = arr(b, "froms");
+                let own: Vec<Tile> = ts
+                    .iter()
+                    .zip(froms)
+                    .filter(|(_, f)| f.as_i64() == Some(seat as i64))
+                    .map(|(t, _)| *t)
+                    .collect();
+                let ty = int(b, "type");
+                let done = c.track
+                    && !own.is_empty()
+                    && c.tile_act(match ty {
+                        2 => Action::Kan {
+                            seat: SeatId(seat),
+                            kind: KanKind::Minkan,
+                            new_dora_indicator: None,
+                            tiles: own.clone(),
+                        },
+                        0 => Action::Call {
+                            seat: SeatId(seat),
+                            kind: MeldKind::Chi,
+                            tiles: own.clone(),
+                        },
+                        _ => Action::Call {
+                            seat: SeatId(seat),
+                            kind: MeldKind::Pon,
+                            tiles: own.clone(),
+                        },
+                    });
+                if !done && c.track {
+                    c.track = false;
+                }
+                // 手牌を追えていないとき: 大明槓だけ操作にする（アガリのときの副露は牌譜から入れる）
+                if !done && ty == 2 {
                     c.act(Action::Kan {
                         seat: SeatId(int(b, "seat") as u8),
                         kind: KanKind::Minkan,
@@ -372,12 +462,42 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
                 if kind == KanKind::Kakan {
                     c.last_kakan = Some(seat);
                 }
-                c.act(Action::Kan {
-                    seat: SeatId(seat),
-                    kind,
-                    new_dora_indicator: None,
-                    tiles: vec![],
-                });
+                // 暗槓の新ドラはすぐめくる（雀魂の記録の doras に入っている）
+                let doras = tiles(arr(b, "doras")).unwrap_or_default();
+                let new_dora = (doras.len() > c.dora.len()).then(|| *doras.last().unwrap());
+                let done = c.track
+                    && match tile(string(b, "tiles"))
+                        .ok()
+                        .or_else(|| tiles(arr(b, "tiles")).ok().and_then(|v| v.first().copied()))
+                        .and_then(|t| janscope_core::hands::self_kan(&c.s, SeatId(seat), t))
+                    {
+                        Some((k, ts)) => {
+                            let ok = c.tile_act(Action::Kan {
+                                seat: SeatId(seat),
+                                kind: k,
+                                new_dora_indicator: if k == KanKind::Ankan {
+                                    new_dora
+                                } else {
+                                    None
+                                },
+                                tiles: ts,
+                            });
+                            if ok && k == KanKind::Ankan && new_dora.is_some() {
+                                c.dora = doras.clone();
+                            }
+                            ok
+                        }
+                        None => false,
+                    };
+                if !done {
+                    c.track = false;
+                    c.act(Action::Kan {
+                        seat: SeatId(seat),
+                        kind,
+                        new_dora_indicator: None,
+                        tiles: vec![],
+                    });
+                }
                 c.sync_dora(b);
             }
             "RecordHule" => {

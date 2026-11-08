@@ -1,4 +1,5 @@
-// JanScope ランチャー（JanScope.exe）: サーバー・配信クライアント・入力担当・選手用画面を1か所から起動する。
+// JanScope ランチャー（JanScope.exe）: サーバー・入力担当（配信のメイン）・配信画面・選手用画面を1か所から起動する。
+// 配信画面は入力担当の中の出力ウィンドウ（入力担当のデータを写す）。閉じても入力担当が残っていれば開き直せる。
 //
 // - Win32 API だけで作る（ライブラリなし）。メニューバー・ツールバー・ステータスバー・中央にバージョン情報
 // - 更新は janscope-server.exe の --update-info / --update に任せる（SHA-256 の確認・失敗時の巻き戻しは Rust 側）
@@ -484,10 +485,42 @@ static void StartMajsoul(const std::wstring& url) {
     Launch(ID_MAJSOUL, L"雀魂の牌譜の取り込み", L"janscope-majsoul.exe", args, true);
 }
 
+// ---- 配信画面（入力担当の中の出力ウィンドウ）----
+struct FindOutCtx {
+    DWORD pid;
+    HWND found;
+};
+static BOOL CALLBACK FindOutputWnd(HWND h, LPARAM l) {
+    auto* c = (FindOutCtx*)l;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != c->pid) return TRUE;
+    wchar_t t[128];
+    GetWindowTextW(h, t, 128);
+    if (wcsncmp(t, L"JanScope 配信画面", 13) == 0) {
+        c->found = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+/// 入力担当が開いている配信画面（なければ nullptr）
+static HWND OutputWindow() {
+    Child* c = Running(ID_INPUT);
+    if (!c) return nullptr;
+    FindOutCtx ctx{c->pid, nullptr};
+    EnumWindows(FindOutputWnd, (LPARAM)&ctx);
+    return ctx.found;
+}
+/// 入力担当への指示を書くファイル
+static std::wstring CommandFile() { return InDir(L"data\\client-command.txt"); }
+
+/// ボタンが「動いている」状態か（配信画面は、入力担当の配信画面が開いているか）
+static bool IsOn(UINT fn) { return fn == ID_BROADCAST ? OutputWindow() != nullptr : Running(fn) != nullptr; }
+
 static void UpdateToggleButtons() {
     for (UINT fn : kToggles) {
         HWND b = GetDlgItem(g_main, (int)fn);
-        if (b) SendMessageW(b, BM_SETCHECK, Running(fn) ? BST_CHECKED : BST_UNCHECKED, 0);
+        if (b) SendMessageW(b, BM_SETCHECK, IsOn(fn) ? BST_CHECKED : BST_UNCHECKED, 0);
     }
 }
 
@@ -568,7 +601,7 @@ static void StartServer(bool resume, bool dummy = false, const std::wstring& dum
     InvalidateRect(g_main, nullptr, TRUE);
 }
 
-static void StartClient(UINT fn, const std::wstring& dummyFile = L"") {
+static void StartClient(UINT fn, const std::wstring& dummyFile = L"", bool withOutput = false) {
     std::wstring args, title = L"配信クライアント";
     if (fn == ID_DEMO) {
         // 機能の確認用: クライアントの中でダミー対局データ入りのサーバーを動かす（サーバーも接続コードも要らない）
@@ -579,7 +612,11 @@ static void StartClient(UINT fn, const std::wstring& dummyFile = L"") {
         args = L"--server " + ServerAddr() + L" --code " + g_set.code;
     }
     if (fn == ID_INPUT) {
-        args += L" --role input";
+        // 入力担当が配信のメイン。配信画面（出力ウィンドウ）は入力担当の中に開く
+        CreateDirectoryW(InDir(L"data").c_str(), nullptr);
+        DeleteFileW(CommandFile().c_str());
+        args += L" --role input --command-file \"" + CommandFile() + L"\"";
+        if (withOutput) args += L" --output";
         title = L"入力担当";
     } else if (fn == ID_PLAYER) {
         args += L" --role player";
@@ -601,9 +638,33 @@ static void StartClient(UINT fn, const std::wstring& dummyFile = L"") {
 
 /// ボタン: 動いていなければ起動、動いていれば終了（サーバーと配信クライアントは確認する）
 static void Toggle(UINT fn) {
+    if (fn == ID_BROADCAST) {
+        // 配信画面: 入力担当の中の出力ウィンドウを開く・閉じる（入力担当がなければ、配信画面つきで起動する）
+        if (HWND w = OutputWindow()) {
+            if (MessageBoxW(g_main, L"配信画面を閉じますか？\n配信中は閉じないでください（入力担当はそのまま残ります。あとで開き直せます）。", L"JanScope",
+                            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES)
+                PostMessageW(w, WM_CLOSE, 0, 0);
+        } else if (Running(ID_INPUT)) {
+            HANDLE f = CreateFileW(CommandFile().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                const char cmd[] = "open-output\n";
+                DWORD n = 0;
+                WriteFile(f, cmd, sizeof(cmd) - 1, &n, nullptr);
+                CloseHandle(f);
+                SetStatus(1, L"配信画面を開いています…");
+            } else {
+                Error(L"入力担当に指示を送れませんでした。入力担当の画面の「配信画面を開く」を押してください。");
+            }
+        } else {
+            StartClient(ID_INPUT, L"", true);
+        }
+        UpdateToggleButtons();
+        return;
+    }
     if (Child* c = Running(fn)) {
-        if (fn == ID_SERVER || fn == ID_BROADCAST) {
-            std::wstring q = c->name + L" を終了しますか？\n配信中・対局中は終了しないでください。";
+        if (fn == ID_SERVER || fn == ID_INPUT) {
+            std::wstring q = c->name + (fn == ID_INPUT ? L" を終了しますか？（配信画面も閉じます）" : L" を終了しますか？") +
+                             L"\n配信中・対局中は終了しないでください。";
             if (MessageBoxW(g_main, q.c_str(), L"JanScope", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
                 UpdateToggleButtons();
                 return;
@@ -925,12 +986,12 @@ static HMENU BuildMenu() {
     AppendMenuW(run, MF_STRING, ID_SERVER, L"サーバー(&S)");
     AppendMenuW(run, MF_STRING, ID_SERVER_RESUME, L"サーバー（いちばん新しいログから再開）(&R)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(run, MF_STRING, ID_BROADCAST, L"配信クライアント（出力＋操作）(&B)");
-    AppendMenuW(run, MF_STRING, ID_INPUT, L"入力担当(&I)");
+    AppendMenuW(run, MF_STRING, ID_INPUT, L"入力担当（配信のメイン）(&I)");
+    AppendMenuW(run, MF_STRING, ID_BROADCAST, L"配信画面（入力担当の画面を写す）(&B)");
     AppendMenuW(run, MF_STRING, ID_PLAYER, L"選手用画面(&P)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
     HMENU review = CreatePopupMenu();
-    AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（配信クライアント＋中のダミーサーバー）(&D)");
+    AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（入力担当・配信画面＋中のダミーサーバー）(&D)");
     AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY, L"サーバー（ダミー対局データ）(&S)");
     AppendMenuW(review, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(review, MF_STRING, ID_MAJSOUL, L"雀魂の牌譜を取り込む(&M)...");
@@ -943,7 +1004,6 @@ static HMENU BuildMenu() {
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)run, L"起動(&R)");
 
     HMENU view = CreatePopupMenu();
-    AppendMenuW(view, MF_STRING, ID_VIEW_BROADCAST, L"配信クライアントの操作画面(&B)");
     AppendMenuW(view, MF_STRING, ID_VIEW_INPUT, L"入力担当の操作画面(&I)");
     AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"ダミーで確認(&D)");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
@@ -974,9 +1034,9 @@ static void UpdateMenuState() {
     EnableMenuItem(m, ID_UPDATE_APPLY, MF_BYCOMMAND | (g_update.available && !g_updating ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_STOP_ALL, MF_BYCOMMAND | (g_children.empty() ? MF_GRAYED : MF_ENABLED));
     // 起動メニュー: 動いているものに印（選ぶと終了）
-    for (UINT fn : kToggles) CheckMenuItem(m, fn, MF_BYCOMMAND | (Running(fn) ? MF_CHECKED : MF_UNCHECKED));
+    for (UINT fn : kToggles) CheckMenuItem(m, fn, MF_BYCOMMAND | (IsOn(fn) ? MF_CHECKED : MF_UNCHECKED));
     // 表示メニュー: 埋め込んでいるものだけ選べる。見せているものに印
-    const UINT views[][2] = {{ID_VIEW_BROADCAST, ID_BROADCAST}, {ID_VIEW_INPUT, ID_INPUT}, {ID_VIEW_DEMO, ID_DEMO}};
+    const UINT views[][2] = {{ID_VIEW_INPUT, ID_INPUT}, {ID_VIEW_DEMO, ID_DEMO}};
     for (auto& v : views) {
         Child* c = Running(v[1]);
         bool ok = c && c->embedded && IsWindow(c->embedded);
@@ -993,11 +1053,11 @@ struct TbItem {
 };
 static const TbItem kToolbar[] = {
     {ID_SERVER, L"サーバー", L"処理サーバーを起動します（接続コードは設定のもの）"},
-    {ID_BROADCAST, L"配信クライアント", L"出力ウィンドウ（OBS で取り込む）と操作ウィンドウ"},
-    {ID_INPUT, L"入力担当", L"入力担当の操作ウィンドウ"},
+    {ID_INPUT, L"入力担当", L"入力担当の操作画面（配信のメイン。手牌・河・点数・シーンなどをここで操作する）"},
+    {ID_BROADCAST, L"配信画面", L"配信画面（OBS で取り込む出力ウィンドウ）。入力担当の画面を写す。閉じても入力担当から開き直せる"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
     {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（牌譜の URL を貼るか、Chrome でログインして牌譜を開く）"},
-    {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした配信クライアント（サーバー・接続コードは不要）"},
+    {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした入力担当と配信画面（サーバー・接続コードは不要）"},
     {0, nullptr, nullptr},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
     {ID_UPDATE_CHECK, L"更新の確認", L"新しい版があるか確かめます"},
