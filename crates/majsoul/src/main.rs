@@ -1,8 +1,10 @@
 //! janscope-majsoul: 雀魂の牌譜を取り込んで、JanScope のダミーデータ（対局履歴）にする。
 //!
-//!     janscope-majsoul [--out data/majsoul] [--keep-names] [--url URL] [--chrome PATH]
+//!     janscope-majsoul [--out data/majsoul] [--keep-names] [--paipu URL|ID] [--url URL] [--chrome PATH]
+//!     janscope-majsoul --open URL|ID [--out data/majsoul]   動いている取り込みの Chrome で牌譜を開く
 //!
 //! Chrome が開くので、自分のアカウントでログインして、取り込みたい牌譜を開く（再生画面を開くだけでよい）。
+//! 牌譜の URL（共有の `…?paipu=…`）を渡せば、その牌譜を直接開く。動いている間は、この画面に URL を貼っても開ける。
 //! 牌譜を開くたびに、`--out` のフォルダに JSON を保存する。サーバーの `--dummy-file` やクライアントの `--dummy-file` で使う。
 
 use std::path::PathBuf;
@@ -17,6 +19,8 @@ fn usage() -> ! {
          使い方: janscope-majsoul [オプション]\n\
          \x20 --out <フォルダ>   保存先（既定 data/majsoul）\n\
          \x20 --keep-names      名前をそのまま残す（既定は「選手A〜D」にする）\n\
+         \x20 --paipu <URL>     この牌譜を開く（共有の URL か牌譜の ID）\n\
+         \x20 --open <URL>      動いている取り込みの Chrome で、この牌譜を開いて終わる\n\
          \x20 --url <URL>       雀魂の URL（既定 {}）\n\
          \x20 --chrome <パス>    Chrome の実行ファイル（既定は自動で探す）",
         env!("CARGO_PKG_VERSION"),
@@ -30,15 +34,41 @@ fn main() {
     let mut keep_names = false;
     let mut url = capture::DEFAULT_URL.to_string();
     let mut chrome = None;
+    let mut paipu = None;
+    let mut open = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = args.next().map(PathBuf::from).unwrap_or_else(|| usage()),
             "--keep-names" => keep_names = true,
             "--url" => url = args.next().unwrap_or_else(|| usage()),
+            "--paipu" => paipu = Some(args.next().unwrap_or_else(|| usage())),
+            "--open" => open = Some(args.next().unwrap_or_else(|| usage())),
             "--chrome" => chrome = Some(args.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             _ => usage(),
         }
+    }
+    let profile = out.join("chrome-profile");
+    let paipu_link = |s: &str| {
+        capture::paipu_url(s).unwrap_or_else(|| {
+            eprintln!("牌譜の URL として読めません: {s}\n（雀魂の牌譜の「共有」で出る https://game.mahjongsoul.com/?paipu=… の形）");
+            std::process::exit(2)
+        })
+    };
+    if let Some(o) = open {
+        let link = paipu_link(&o);
+        let Some(port) = capture::running_port(&profile) else {
+            eprintln!("取り込みの Chrome が動いていません");
+            std::process::exit(1)
+        };
+        if let Err(e) = capture::open_tab(port, &link) {
+            eprintln!("{e}");
+            std::process::exit(1)
+        }
+        return;
+    }
+    if let Some(p) = &paipu {
+        url = paipu_link(p);
     }
     let Some(chrome) = chrome.or_else(capture::find_chrome) else {
         eprintln!(
@@ -46,13 +76,17 @@ fn main() {
         );
         std::process::exit(1);
     };
-    // ログインを覚えておくための、JanScope 専用の Chrome のプロファイル
-    let profile = out.join("chrome-profile");
+    // ログインを覚えておくための、JanScope 専用の Chrome のプロファイル（profile）
     let schema_file = out.join("liqi.json");
     println!("==============================================");
     println!(" 雀魂の牌譜の取り込み");
     println!(" 1. 開いた Chrome で、自分のアカウントでログインします");
-    println!(" 2. 取り込みたい対局の牌譜を開きます（牌譜一覧 → 再生）");
+    if paipu.is_some() {
+        println!(" 2. 指定した牌譜が開きます（ログインのあと、牌譜が始まれば保存されます）");
+    } else {
+        println!(" 2. 取り込みたい対局の牌譜を開きます（牌譜一覧 → 再生）");
+    }
+    println!("    牌譜の URL（共有の …?paipu=…）をここに貼って Enter でも開けます");
     println!(" 3. 開くたびに、ここに保存先が出ます。終わったら Chrome を閉じてください");
     println!(
         " 名前は{}",
@@ -90,6 +124,25 @@ fn main() {
                 matches!(child.lock().unwrap().try_wait(), Ok(None))
             });
             let _ = tx.send(Event::Info("__closed__".into()));
+        });
+    }
+    {
+        // この画面に貼られた牌譜の URL を、新しいタブで開く
+        let (tx, port) = (tx.clone(), browser.port);
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lines().map_while(Result::ok) {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let msg = match capture::paipu_url(&line) {
+                    Some(link) => match capture::open_tab(port, &link) {
+                        Ok(()) => format!("牌譜を開きます: {link}"),
+                        Err(e) => e,
+                    },
+                    None => format!("牌譜の URL として読めません: {}", line.trim()),
+                };
+                let _ = tx.send(Event::Info(msg));
+            }
         });
     }
     drop(tx);

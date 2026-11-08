@@ -76,6 +76,10 @@ pub fn launch(chrome: &Path, profile: &Path) -> Result<Browser, String> {
                 .split_whitespace(),
         )
         .arg("about:blank")
+        // Chrome のログはこの画面に出さない。この画面の入力（貼った URL）は取り込みが読む
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("Chrome を起動できません（{}）: {e}", chrome.display()))?;
     let until = Instant::now() + Duration::from_secs(30);
@@ -90,13 +94,49 @@ pub fn launch(chrome: &Path, profile: &Path) -> Result<Browser, String> {
     Err("Chrome の DevTools のポートが分かりません（すでに同じプロファイルの Chrome が開いていないか確かめてください）".into())
 }
 
+/// 牌譜の URL（共有の `…?paipu=…`）か牌譜の ID から、開く URL を作る。どちらでもなければ None
+pub fn paipu_url(input: &str) -> Option<String> {
+    let t = input.trim();
+    if t.starts_with("http://") || t.starts_with("https://") {
+        return t.contains("paipu=").then(|| t.to_string());
+    }
+    let id = t.strip_prefix("paipu=").unwrap_or(t);
+    let ok = id.len() >= 10
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then(|| format!("{DEFAULT_URL}?paipu={id}"))
+}
+
+/// 動いている Chrome の DevTools のポート（プロファイルの DevToolsActivePort から）
+pub fn running_port(profile: &Path) -> Option<u16> {
+    let t = std::fs::read_to_string(profile.join("DevToolsActivePort")).ok()?;
+    let port = t.lines().next()?.trim().parse::<u16>().ok()?;
+    TcpStream::connect(("127.0.0.1", port)).ok()?;
+    Some(port)
+}
+
+/// 動いている Chrome で、新しいタブにその URL を開く（新しいタブも読み取りの対象になる）
+pub fn open_tab(port: u16, url: &str) -> Result<(), String> {
+    let body = http(port, "PUT", &format!("/json/new?{url}"))?;
+    if body.contains("webSocketDebuggerUrl") {
+        Ok(())
+    } else {
+        Err(format!("タブを開けません: {}", body.trim()))
+    }
+}
+
 /// `http://127.0.0.1:port/json/list` を読む（小さな HTTP）
 fn http_get(port: u16, path: &str) -> Result<String, String> {
+    http(port, "GET", path)
+}
+
+fn http(port: u16, method: &str, path: &str) -> Result<String, String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )
     .map_err(|e| e.to_string())?;
     // Chrome は接続を閉じないことがあるので、Content-Length ぶん読んだら終わる

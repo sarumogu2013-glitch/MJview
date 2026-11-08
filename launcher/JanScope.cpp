@@ -53,6 +53,7 @@ enum : UINT {
     ID_DEMO,  // ダミーで確認（配信クライアント＋中のダミーサーバー）
     ID_SERVER_DUMMY,
     ID_MAJSOUL,            // 雀魂の牌譜の取り込み（janscope-majsoul.exe）
+    ID_MAJSOUL_URL,        // 牌譜の URL を開いて取り込む
     ID_DUMMY_FILE,         // 取り込んだ対局で確認（配信クライアント＋中のダミーサーバー）
     ID_SERVER_DUMMY_FILE,  // サーバー（取り込んだ対局）
     ID_STOP_ALL,
@@ -369,6 +370,103 @@ static std::wstring PickDummyFile() {
     return file;
 }
 
+// ---- 牌譜の URL を聞くダイアログ（JanScope.rc の 101）----
+enum { IDD_PAIPU = 101, IDC_PAIPU_URL = 1101, IDC_PAIPU_NOTE = 1102 };
+struct PaipuAsk {
+    bool allowEmpty;
+    std::wstring url;
+};
+
+static std::wstring ClipboardText() {
+    std::wstring t;
+    if (!OpenClipboard(g_main)) return t;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        if (auto* p = (const wchar_t*)GlobalLock(h)) {
+            t = p;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return Trim(t);
+}
+
+/// 牌譜の URL（…paipu=…）か牌譜の ID に見えるか（細かい確認は janscope-majsoul がする）
+static bool LooksLikePaipu(const std::wstring& t) {
+    if (t.find(L"paipu=") != std::wstring::npos) return t.rfind(L"http", 0) == 0 || t.rfind(L"paipu=", 0) == 0;
+    if (t.size() < 10) return false;
+    for (wchar_t c : t)
+        if (!(iswalnum(c) && c < 128) && c != L'-' && c != L'_') return false;
+    return true;
+}
+
+static INT_PTR CALLBACK PaipuProc(HWND d, UINT m, WPARAM w, LPARAM l) {
+    auto* a = (PaipuAsk*)GetWindowLongPtrW(d, DWLP_USER);
+    switch (m) {
+        case WM_INITDIALOG: {
+            SetWindowLongPtrW(d, DWLP_USER, l);
+            a = (PaipuAsk*)l;
+            if (!a->allowEmpty)
+                SetDlgItemTextW(d, IDC_PAIPU_NOTE, L"取り込みの Chrome で、新しいタブに開きます。ログインしていれば、牌譜が始まると保存されます。");
+            // コピーしてある牌譜の URL があれば、最初から入れておく
+            std::wstring clip = ClipboardText();
+            HWND e = GetDlgItem(d, IDC_PAIPU_URL);
+            if (clip.find(L"paipu=") != std::wstring::npos && clip.find(L'\n') == std::wstring::npos) {
+                SetWindowTextW(e, clip.c_str());
+                SendMessageW(e, EM_SETSEL, 0, -1);
+            }
+            SetFocus(e);
+            return FALSE;
+        }
+        case WM_COMMAND:
+            if (LOWORD(w) == IDOK) {
+                wchar_t buf[2048] = L"";
+                GetDlgItemTextW(d, IDC_PAIPU_URL, buf, 2048);
+                std::wstring t = Trim(buf);
+                t.erase(std::remove(t.begin(), t.end(), L'"'), t.end());
+                if (t.empty() && !a->allowEmpty) {
+                    MessageBeep(MB_ICONWARNING);
+                    return TRUE;
+                }
+                if (!t.empty() && !LooksLikePaipu(t)) {
+                    MessageBoxW(d,
+                                L"牌譜の URL として読めません。\n\n雀魂の牌譜の「共有」で出る\nhttps://game.mahjongsoul.com/?paipu=…\nの形の URL を貼ってください。",
+                                L"JanScope", MB_OK | MB_ICONWARNING);
+                    return TRUE;
+                }
+                a->url = t;
+                EndDialog(d, IDOK);
+                return TRUE;
+            }
+            if (LOWORD(w) == IDCANCEL) {
+                EndDialog(d, IDCANCEL);
+                return TRUE;
+            }
+            break;
+    }
+    return FALSE;
+}
+
+/// 牌譜の URL を聞く。キャンセルなら false。allowEmpty なら空欄（雀魂のトップを開く）もよい
+static bool AskPaipu(bool allowEmpty, std::wstring& url) {
+    PaipuAsk a{allowEmpty, L""};
+    if (DialogBoxParamW(g_inst, MAKEINTRESOURCEW(IDD_PAIPU), g_main, PaipuProc, (LPARAM)&a) != IDOK) return false;
+    url = a.url;
+    return true;
+}
+
+static std::wstring MajsoulOut() {
+    CreateDirectoryW(InDir(L"data").c_str(), nullptr);
+    return L"--out \"" + InDir(L"data\\majsoul") + L"\"";
+}
+
+/// 雀魂の牌譜の取り込みを始める（url が空なら雀魂のトップ）
+static void StartMajsoul(const std::wstring& url) {
+    std::wstring args = MajsoulOut();
+    if (!url.empty()) args += L" --paipu \"" + url + L"\"";
+    // コンソールに案内と保存先が出る。Chrome が開くので、自分でログインする
+    Launch(ID_MAJSOUL, L"雀魂の牌譜の取り込み", L"janscope-majsoul.exe", args, true);
+}
+
 static void UpdateToggleButtons() {
     for (UINT fn : kToggles) {
         HWND b = GetDlgItem(g_main, (int)fn);
@@ -499,9 +597,9 @@ static void Toggle(UINT fn) {
     }
     if (fn == ID_SERVER) StartServer(false);
     else if (fn == ID_MAJSOUL) {
-        // 雀魂の牌譜の取り込み: コンソールに案内と保存先が出る。Chrome が開くので、自分でログインして牌譜を開く
-        CreateDirectoryW(InDir(L"data").c_str(), nullptr);
-        Launch(ID_MAJSOUL, L"雀魂の牌譜の取り込み", L"janscope-majsoul.exe", L"--out \"" + InDir(L"data\\majsoul") + L"\"", true);
+        // 雀魂の牌譜の取り込み: 先に牌譜の URL を聞く（空欄なら雀魂のトップを開いて、一覧から選ぶ）
+        std::wstring url;
+        if (AskPaipu(true, url)) StartMajsoul(url);
     } else StartClient(fn);
     UpdateToggleButtons();
 }
@@ -512,11 +610,11 @@ static void ViewEmbedded(UINT fn) {
     if (c && c->embedded && IsWindow(c->embedded)) ShowEmbedded(c->embedded);
 }
 
-// ---- 外部プログラムを動かして出力を受け取る（更新用）----
-static bool RunCapture(const std::wstring& args, std::string& out, DWORD& code) {
-    std::wstring path = InDir(L"janscope-server.exe");
+// ---- 外部プログラムを動かして出力を受け取る（更新用・牌譜を開く）----
+static bool RunCapture(const std::wstring& args, std::string& out, DWORD& code, const wchar_t* exe = L"janscope-server.exe") {
+    std::wstring path = InDir(exe);
     if (!Exists(path)) {
-        out = "janscope-server.exe が見つかりません";
+        out = "プログラムが見つかりません";
         code = 1;
         return false;
     }
@@ -537,7 +635,7 @@ static bool RunCapture(const std::wstring& args, std::string& out, DWORD& code) 
     CloseHandle(wr);
     if (!ok) {
         CloseHandle(rd);
-        out = "janscope-server.exe を起動できません";
+        out = "プログラムを起動できません";
         code = 1;
         return false;
     }
@@ -800,7 +898,8 @@ static HMENU BuildMenu() {
     AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（配信クライアント＋中のダミーサーバー）(&D)");
     AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY, L"サーバー（ダミー対局データ）(&S)");
     AppendMenuW(review, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(review, MF_STRING, ID_MAJSOUL, L"雀魂の牌譜を取り込む(&M)");
+    AppendMenuW(review, MF_STRING, ID_MAJSOUL, L"雀魂の牌譜を取り込む(&M)...");
+    AppendMenuW(review, MF_STRING, ID_MAJSOUL_URL, L"牌譜の URL を開いて取り込む(&U)...");
     AppendMenuW(review, MF_STRING, ID_DUMMY_FILE, L"取り込んだ対局で確認(&F)...");
     AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY_FILE, L"サーバー（取り込んだ対局）(&G)...");
     AppendMenuW(run, MF_POPUP, (UINT_PTR)review, L"機能の確認用(&T)");
@@ -862,7 +961,7 @@ static const TbItem kToolbar[] = {
     {ID_BROADCAST, L"配信クライアント", L"出力ウィンドウ（OBS で取り込む）と操作ウィンドウ"},
     {ID_INPUT, L"入力担当", L"入力担当の操作ウィンドウ"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
-    {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（Chrome が開くので、自分でログインして牌譜を開く）"},
+    {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（牌譜の URL を貼るか、Chrome でログインして牌譜を開く）"},
     {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした配信クライアント（サーバー・接続コードは不要）"},
     {0, nullptr, nullptr},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
@@ -1065,6 +1164,23 @@ static void OnUpdateDone(DWORD code, std::wstring* out) {
     UpdateMenuState();
 }
 
+/// 牌譜の URL を開いて取り込む。取り込み中なら、その Chrome の新しいタブに開く
+static void OpenMajsoulUrl() {
+    bool running = Running(ID_MAJSOUL) != nullptr;
+    std::wstring url;
+    if (!AskPaipu(false, url)) return;
+    if (!running) {
+        StartMajsoul(url);
+        UpdateToggleButtons();
+        return;
+    }
+    std::string out;
+    DWORD code = 0;
+    RunCapture(MajsoulOut() + L" --open \"" + url + L"\"", out, code, L"janscope-majsoul.exe");
+    if (code != 0) Error(L"牌譜を開けませんでした。\n\n" + Widen(out));
+    else SetStatus(1, L"牌譜を開きました（取り込みの画面に保存先が出ます）");
+}
+
 static void OnCommand(UINT id) {
     switch (id) {
         case ID_SERVER:
@@ -1073,6 +1189,7 @@ static void OnCommand(UINT id) {
         case ID_PLAYER:
         case ID_DEMO:
         case ID_MAJSOUL: Toggle(id); break;
+        case ID_MAJSOUL_URL: OpenMajsoulUrl(); break;
         case ID_DUMMY_FILE: {
             if (Running(ID_DEMO)) {
                 Error(L"ダミーで確認しているクライアントが動いています。いったん終了してください。");

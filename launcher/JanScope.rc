@@ -6,6 +6,19 @@
 // アイコン（tools/make_icon.py で作る）。LoadIcon(inst, 1) で使う
 1 ICON "../assets/icon/janscope.ico"
 
+// 牌譜の URL を聞くダイアログ（JanScope.cpp の IDD_PAIPU など）
+101 DIALOGEX 0, 0, 330, 92
+STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "雀魂の牌譜を取り込む"
+FONT 9, "Yu Gothic UI", 400, 0, 0x80
+BEGIN
+  LTEXT "牌譜の URL（雀魂の牌譜の「共有」で出る https://game.mahjongsoul.com/?paipu=…）", -1, 7, 7, 316, 10
+  EDITTEXT 1101, 7, 20, 316, 14, ES_AUTOHSCROLL
+  LTEXT "空欄のままなら雀魂のトップを開きます。ログインして、牌譜一覧から開いても取り込めます。", 1102, 7, 40, 316, 24
+  DEFPUSHBUTTON "開く", IDOK, 216, 70, 50, 15
+  PUSHBUTTON "キャンセル", IDCANCEL, 273, 70, 50, 15
+END
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0
 PRODUCTVERSION 1,0,0,0

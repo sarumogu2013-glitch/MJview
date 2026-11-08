@@ -55,3 +55,17 @@ fn response_is_matched_to_request_by_index() {
     // 同じ番号の応答は1回だけ
     assert!(t.on_received(&s, &frame).is_none());
 }
+
+#[test]
+fn paipu_links() {
+    use janscope_majsoul::capture::paipu_url;
+    let u =
+        "https://game.mahjongsoul.com/?paipu=240101-0a1b2c3d-4e5f-6789-abcd-ef0123456789_a12345678";
+    assert_eq!(paipu_url(u).as_deref(), Some(u));
+    assert_eq!(
+        paipu_url(" 240101-0a1b2c3d-4e5f-6789-abcd-ef0123456789 ").as_deref(),
+        Some("https://game.mahjongsoul.com/?paipu=240101-0a1b2c3d-4e5f-6789-abcd-ef0123456789")
+    );
+    assert_eq!(paipu_url("https://game.mahjongsoul.com/"), None);
+    assert_eq!(paipu_url("こんにちは"), None);
+}
