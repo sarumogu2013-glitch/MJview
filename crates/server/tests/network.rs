@@ -31,7 +31,7 @@ fn cfg(dir: &PathBuf, port: u16, resume: Option<PathBuf>) -> ServerConfig {
         code: CODE.into(),
         data_dir: dir.clone(),
         resume,
-        dummy: false,
+        dummy: None,
     }
 }
 
@@ -360,7 +360,7 @@ async fn tournament_records_finished_games() {
 async fn dummy_game_data() {
     let dir = tmp_dir("dummy");
     let mut c = cfg(&dir, 0, None);
-    c.dummy = true;
+    c.dummy = Some(janscope_core::dummy::actions());
     let running = start(c).await.unwrap();
     let addr = running.addr;
     tokio::task::spawn_blocking(move || {

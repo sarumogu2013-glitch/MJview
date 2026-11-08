@@ -43,7 +43,7 @@ jobs:
       - name: テスト
         run: cargo test --workspace --release
       - name: ビルド
-        run: cargo build --release -p janscope-server -p janscope-client
+        run: cargo build --release -p janscope-server -p janscope-client -p janscope-majsoul
       - name: ランチャー（JanScope.exe、C++）
         shell: cmd
         run: launcher\build.bat %TAG:v=%

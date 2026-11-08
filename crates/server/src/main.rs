@@ -105,6 +105,7 @@ fn usage() -> ! {
          \x20 --resume <ファイル> 指定したログから続きを再開\n\
          \x20 --resume-latest    いちばん新しいログから続きを再開\n\
          \x20 --dummy            機能の確認用: ダミー対局データ（局の途中）で始める（data/dummy に保存）\n\
+         \x20 --dummy-file <ファイル> 機能の確認用: 取り込んだ対局（雀魂の牌譜など）で始める\n\
          \x20 --no-update-check  起動時に新しい版を確かめない\n\
          \x20 --check-update     新しい版があるか確かめて終わる\n\
          \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\
@@ -127,7 +128,7 @@ async fn main() {
     let mut resume = None;
     let mut resume_latest = false;
     let mut update_check = true;
-    let mut dummy = false;
+    let mut dummy: Option<Vec<janscope_core::state::Action>> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -142,7 +143,23 @@ async fn main() {
             "--resume" => resume = Some(args.next().map(PathBuf::from).unwrap_or_else(|| usage())),
             "--resume-latest" => resume_latest = true,
             "--no-update-check" => update_check = false,
-            "--dummy" => dummy = true,
+            "--dummy" => dummy = Some(janscope_core::dummy::actions()),
+            "--dummy-file" => {
+                let p = args.next().unwrap_or_else(|| usage());
+                match std::fs::read_to_string(&p)
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| janscope_core::dummy::load(&t))
+                {
+                    Ok(d) => {
+                        println!(" ダミーデータ: {}（{} 手）", d.title, d.actions.len());
+                        dummy = Some(d.actions);
+                    }
+                    Err(e) => {
+                        eprintln!("ダミーデータを読めません（{p}）: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             "--check-update" => {
                 print_update_check();
                 return;
@@ -168,7 +185,7 @@ async fn main() {
         }
     }
     // ダミーは本番のログ・大会通算と混ざらないように別のフォルダ
-    if dummy {
+    if dummy.is_some() {
         data = data.join("dummy");
         println!(
             " ダミー対局データで始めます（機能の確認用。保存先 {}）",

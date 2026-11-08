@@ -47,6 +47,8 @@ struct Args {
     demo: bool,
     /// 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ
     dummy_server: bool,
+    /// --dummy-file: 取り込んだ対局（雀魂の牌譜など）をダミー対局データにする
+    dummy_file: Option<String>,
     screenshot: Option<String>,
     fullscreen: bool,
     monitor: Option<usize>,
@@ -63,7 +65,8 @@ fn usage() -> ! {
          \x20 --monitor <番号>                全画面にするモニター（0から）\n\
          \x20 --output-borderless            出力ウィンドウを枠なしで開く（全画面はツールバーのボタンで）\n\
          \x20 --embed                        操作ウィンドウをランチャー（JanScope.exe）に埋め込む（ランチャーが付ける）\n\
-         \x20 --dummy-server                 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ（--server・--code は不要）",
+         \x20 --dummy-server                 機能の確認用: ダミー対局データ入りのサーバーを中で動かしてつなぐ（--server・--code は不要）\n\
+         \x20 --dummy-file <ファイル>         機能の確認用: 取り込んだ対局（雀魂の牌譜など）で --dummy-server と同じことをする",
         janscope_core::VERSION
     );
     std::process::exit(2)
@@ -76,6 +79,7 @@ fn parse_args() -> Args {
         role: ClientRole::Broadcast,
         demo: false,
         dummy_server: false,
+        dummy_file: None,
         screenshot: None,
         fullscreen: false,
         monitor: None,
@@ -97,6 +101,10 @@ fn parse_args() -> Args {
             }
             "--demo" => a.demo = true,
             "--dummy-server" => a.dummy_server = true,
+            "--dummy-file" => {
+                a.dummy_server = true;
+                a.dummy_file = Some(it.next().unwrap_or_else(|| usage()));
+            }
             "--screenshot" => a.screenshot = Some(it.next().unwrap_or_else(|| usage())),
             "--fullscreen" => a.fullscreen = true,
             "--monitor" => a.monitor = it.next().and_then(|v| v.parse().ok()),
@@ -206,7 +214,7 @@ fn main() {
 
     if args.dummy_server {
         // ダミーサーバー: 中で本物のサーバー（ダミー対局データ入り）を動かすので、操作・取り消しなど全部試せる
-        match start_dummy_server() {
+        match start_dummy_server(args.dummy_file.clone()) {
             Ok((addr, code)) => {
                 app.insert_resource(net::Net::connect(&addr, &code, role));
             }
@@ -321,7 +329,14 @@ fn reload_config_file(
 }
 
 /// --dummy-server: ダミー対局データ入りのサーバーを、このプロセスの中（別スレッド）で動かす。宛先と接続コードを返す
-fn start_dummy_server() -> Result<(String, String), String> {
+fn start_dummy_server(file: Option<String>) -> Result<(String, String), String> {
+    let actions = match &file {
+        Some(p) => {
+            let t = std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?;
+            janscope_core::dummy::load(&t)?.actions
+        }
+        None => janscope_core::dummy::actions(),
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("janscope-dummy-server".into())
@@ -345,7 +360,7 @@ fn start_dummy_server() -> Result<(String, String), String> {
                     // 本番のログ・大会通算と混ざらないよう、一時フォルダに置く
                     data_dir: std::env::temp_dir().join("janscope-dummy"),
                     resume: None,
-                    dummy: true,
+                    dummy: Some(actions),
                 };
                 match janscope_server::start(cfg).await {
                     Ok(running) => {

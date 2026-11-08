@@ -3076,7 +3076,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "janscope-client"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -3095,7 +3095,7 @@ dependencies = [
 
 [[package]]
 name = "janscope-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "mahc",
  "serde",
@@ -3104,8 +3104,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "janscope-majsoul"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "janscope-core",
+ "serde",
+ "serde_json",
+ "tungstenite",
+ "ureq",
+]
+
+[[package]]
 name = "janscope-netclient"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "futures-util",
  "janscope-core",
@@ -3116,7 +3128,7 @@ dependencies = [
 
 [[package]]
 name = "janscope-server"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "futures-util",
  "janscope-core",
@@ -3133,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "janscope-update"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "semver",
  "serde",
@@ -3146,7 +3158,7 @@ dependencies = [
 
 [[package]]
 name = "janscope-video"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64",
  "futures-util",

@@ -1,0 +1,20 @@
+[package]
+name = "janscope-majsoul"
+description = "雀魂の牌譜を取り込んで、JanScope の対局履歴（操作の列）に変換する（機能の確認用のダミーデータ）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "janscope-majsoul"
+path = "src/main.rs"
+
+[dependencies]
+janscope-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.23"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier"] }

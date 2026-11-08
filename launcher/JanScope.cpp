@@ -8,7 +8,7 @@
 //
 // ビルド: build.bat（Visual Studio）または
 //   x86_64-w64-mingw32-windres JanScope.rc -O coff -o JanScope.res.o
-//   x86_64-w64-mingw32-g++ -O2 -municode -mwindows -static -DJANSCOPE_VERSION="\"x.y.z\"" JanScope.cpp JanScope.res.o -lcomctl32 -lshell32 -lshlwapi -o JanScope.exe
+//   x86_64-w64-mingw32-g++ -O2 -municode -mwindows -static -DJANSCOPE_VERSION="\"x.y.z\"" JanScope.cpp JanScope.res.o -lcomctl32 -lshell32 -lshlwapi -lcomdlg32 -o JanScope.exe
 
 #ifndef UNICODE
 #define UNICODE
@@ -27,6 +27,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shlwapi.h>
+#include <commdlg.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -51,6 +52,9 @@ enum : UINT {
     ID_PLAYER,
     ID_DEMO,  // ダミーで確認（配信クライアント＋中のダミーサーバー）
     ID_SERVER_DUMMY,
+    ID_MAJSOUL,            // 雀魂の牌譜の取り込み（janscope-majsoul.exe）
+    ID_DUMMY_FILE,         // 取り込んだ対局で確認（配信クライアント＋中のダミーサーバー）
+    ID_SERVER_DUMMY_FILE,  // サーバー（取り込んだ対局）
     ID_STOP_ALL,
     ID_SETTINGS,
     ID_EXIT,
@@ -344,7 +348,26 @@ static void OnEmbedTimer() {
 }
 
 // ---- ボタンの押された状態 ----
-static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO};
+static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO, ID_MAJSOUL};
+
+/// 取り込んだ対局（data\majsoul の JSON）を選ぶ。やめたら空
+static std::wstring PickDummyFile() {
+    std::wstring dir = InDir(L"data\\majsoul");
+    CreateDirectoryW(InDir(L"data").c_str(), nullptr);
+    CreateDirectoryW(dir.c_str(), nullptr);
+    wchar_t file[MAX_PATH * 2] = L"";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = g_main;
+    ofn.lpstrFilter = L"取り込んだ対局 (*.json)\0*.json\0すべてのファイル\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH * 2;
+    ofn.lpstrInitialDir = dir.c_str();
+    ofn.lpstrTitle = L"取り込んだ対局を選ぶ";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&ofn)) return L"";
+    return file;
+}
 
 static void UpdateToggleButtons() {
     for (UINT fn : kToggles) {
@@ -412,7 +435,7 @@ static bool NeedCode() {
     return false;
 }
 
-static void StartServer(bool resume, bool dummy = false) {
+static void StartServer(bool resume, bool dummy = false, const std::wstring& dummyFile = L"") {
     if (!ValidCode(g_set.code)) {
         g_set.code = NewCode();
         SaveSettings(g_set);
@@ -423,17 +446,19 @@ static void StartServer(bool resume, bool dummy = false) {
     }
     std::wstring args = L"--port " + g_set.port + L" --code " + g_set.code;
     if (resume) args += L" --resume-latest";
-    if (dummy) args += L" --dummy";
+    if (!dummyFile.empty()) args += L" --dummy-file \"" + dummyFile + L"\"";
+    else if (dummy) args += L" --dummy";
+    dummy = dummy || !dummyFile.empty();
     Launch(ID_SERVER, dummy ? L"サーバー（ダミー対局データ）" : resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
     InvalidateRect(g_main, nullptr, TRUE);
 }
 
-static void StartClient(UINT fn) {
+static void StartClient(UINT fn, const std::wstring& dummyFile = L"") {
     std::wstring args, title = L"配信クライアント";
     if (fn == ID_DEMO) {
         // 機能の確認用: クライアントの中でダミー対局データ入りのサーバーを動かす（サーバーも接続コードも要らない）
-        args = L"--dummy-server";
-        title = L"ダミーで確認";
+        args = dummyFile.empty() ? L"--dummy-server" : L"--dummy-file \"" + dummyFile + L"\"";
+        title = dummyFile.empty() ? L"ダミーで確認" : L"取り込んだ対局で確認";
     } else {
         if (!NeedCode()) return;
         args = L"--server " + ServerAddr() + L" --code " + g_set.code;
@@ -473,7 +498,11 @@ static void Toggle(UINT fn) {
         return;
     }
     if (fn == ID_SERVER) StartServer(false);
-    else StartClient(fn);
+    else if (fn == ID_MAJSOUL) {
+        // 雀魂の牌譜の取り込み: コンソールに案内と保存先が出る。Chrome が開くので、自分でログインして牌譜を開く
+        CreateDirectoryW(InDir(L"data").c_str(), nullptr);
+        Launch(ID_MAJSOUL, L"雀魂の牌譜の取り込み", L"janscope-majsoul.exe", L"--out \"" + InDir(L"data\\majsoul") + L"\"", true);
+    } else StartClient(fn);
     UpdateToggleButtons();
 }
 
@@ -770,6 +799,10 @@ static HMENU BuildMenu() {
     HMENU review = CreatePopupMenu();
     AppendMenuW(review, MF_STRING, ID_DEMO, L"ダミーで確認（配信クライアント＋中のダミーサーバー）(&D)");
     AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY, L"サーバー（ダミー対局データ）(&S)");
+    AppendMenuW(review, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(review, MF_STRING, ID_MAJSOUL, L"雀魂の牌譜を取り込む(&M)");
+    AppendMenuW(review, MF_STRING, ID_DUMMY_FILE, L"取り込んだ対局で確認(&F)...");
+    AppendMenuW(review, MF_STRING, ID_SERVER_DUMMY_FILE, L"サーバー（取り込んだ対局）(&G)...");
     AppendMenuW(run, MF_POPUP, (UINT_PTR)review, L"機能の確認用(&T)");
     AppendMenuW(run, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(run, MF_STRING, ID_STOP_ALL, L"起動したものをすべて閉じる(&C)");
@@ -829,6 +862,7 @@ static const TbItem kToolbar[] = {
     {ID_BROADCAST, L"配信クライアント", L"出力ウィンドウ（OBS で取り込む）と操作ウィンドウ"},
     {ID_INPUT, L"入力担当", L"入力担当の操作ウィンドウ"},
     {ID_PLAYER, L"選手用画面", L"選手用画面（設定のモニターに出します）"},
+    {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（Chrome が開くので、自分でログインして牌譜を開く）"},
     {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした配信クライアント（サーバー・接続コードは不要）"},
     {0, nullptr, nullptr},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
@@ -1037,7 +1071,28 @@ static void OnCommand(UINT id) {
         case ID_BROADCAST:
         case ID_INPUT:
         case ID_PLAYER:
-        case ID_DEMO: Toggle(id); break;
+        case ID_DEMO:
+        case ID_MAJSOUL: Toggle(id); break;
+        case ID_DUMMY_FILE: {
+            if (Running(ID_DEMO)) {
+                Error(L"ダミーで確認しているクライアントが動いています。いったん終了してください。");
+                break;
+            }
+            std::wstring f = PickDummyFile();
+            if (!f.empty()) StartClient(ID_DEMO, f);
+            UpdateToggleButtons();
+            break;
+        }
+        case ID_SERVER_DUMMY_FILE: {
+            if (Running(ID_SERVER)) {
+                Error(L"サーバーはもう動いています。いったん終了してください。");
+                break;
+            }
+            std::wstring f = PickDummyFile();
+            if (!f.empty()) StartServer(false, false, f);
+            UpdateToggleButtons();
+            break;
+        }
         case ID_SERVER_DUMMY:
             if (Running(ID_SERVER)) Error(L"サーバーはもう動いています。ダミーで起動するには、いったん終了してください。");
             else StartServer(false, true);

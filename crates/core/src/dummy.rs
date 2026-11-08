@@ -3,6 +3,8 @@
 //! 普通の操作（[`Action`]）を並べたものなので、取り消し・やり直しや、ここからの続きの操作もそのまま試せる。
 //! 中身: 東1局で南家がロン → 東2局でツモ → 東3局の途中（ドラ表示・山の残り・北家のリーチ）
 
+use serde::{Deserialize, Serialize};
+
 use crate::rules::GameConfig;
 use crate::scoring::WinInput;
 use crate::state::{Action, Player};
@@ -32,6 +34,34 @@ fn win(winner: u8, loser: Option<u8>, closed: &str, wt: &str, riichi: bool) -> W
         ura_indicators: vec![],
         pao: None,
     }
+}
+
+/// 取り込んだ対局（雀魂の牌譜などから作ったダミーデータ）のファイル
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DummyFile {
+    pub format: String,
+    pub source: String,
+    pub uuid: String,
+    pub title: String,
+    pub actions: Vec<Action>,
+    /// 変換で合わせたところ（点数の手動調整など）
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+pub const FORMAT: &str = "janscope-dummy-v1";
+
+/// ダミーデータのファイルを読む
+pub fn load(text: &str) -> Result<DummyFile, String> {
+    let d: DummyFile = serde_json::from_str(text)
+        .map_err(|e| format!("ダミーデータのファイルを読めません: {e}"))?;
+    if d.format != FORMAT {
+        return Err(format!("ダミーデータの形式が違います（{}）", d.format));
+    }
+    if d.actions.is_empty() {
+        return Err("ダミーデータに操作がありません".into());
+    }
+    Ok(d)
 }
 
 /// ダミー対局の操作の列（最初から順に当てる）
