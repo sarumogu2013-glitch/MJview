@@ -224,11 +224,11 @@ impl TileInput {
             let need = if full { 14 } else { 13 } - 3 * st.melds.len();
             return Step::Fix { seat, need };
         }
-        if s.turn == Turn::None {
-            if let Some(seat) = hands::next_haipai(s) {
-                let need = if seat == s.dealer() { 14 } else { 13 };
-                return Step::Haipai { seat, need };
-            }
+        if s.turn == Turn::None
+            && let Some(seat) = hands::next_haipai(s)
+        {
+            let need = if seat == s.dealer() { 14 } else { 13 };
+            return Step::Haipai { seat, need };
         }
         match s.turn {
             Turn::Discard { seat } => Step::Discard { seat },
@@ -407,7 +407,7 @@ impl TileInput {
                     (Sub::CallWho(kind), NumKey::Digit(n @ 1..=3)) => {
                         let seat = SeatId((discarder.0 + n) % 4);
                         let hand = &s.seats[seat.index()].hand;
-                        let Some(c) = called else { return None };
+                        let c = called?;
                         match kind {
                             CallKind::Pon => {
                                 let opts = hands::pon_options(hand, c);
@@ -987,7 +987,9 @@ fn numpad(ui: &mut egui::Ui, labels: &[(NumKey, String)]) -> Option<NumKey> {
         egui::Sense::hover(),
     );
     // (キー, 表示, 列, 行, 幅, 高さ)
-    let keys: [(Option<NumKey>, &str, f32, f32, f32, f32); 17] = [
+    // (キー, 表示, 列, 行, 幅, 高さ)
+    type Key = (Option<NumKey>, &'static str, f32, f32, f32, f32);
+    let keys: [Key; 17] = [
         (None, "Num", 0.0, 0.0, 1.0, 1.0),
         (Some(NumKey::Div), "/", 1.0, 0.0, 1.0, 1.0),
         (Some(NumKey::Mul), "*", 2.0, 0.0, 1.0, 1.0),

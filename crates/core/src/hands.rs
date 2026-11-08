@@ -223,7 +223,7 @@ pub fn call(
     if tiles.len() != 2 {
         return invalid("鳴きでは手牌から2枚出します");
     }
-    let mut all = vec![called, tiles[0], tiles[1]];
+    let mut all = [called, tiles[0], tiles[1]];
     all.sort_by_key(|t| t.kind());
     let ok = match kind {
         MeldKind::Chi => {
