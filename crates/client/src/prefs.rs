@@ -258,6 +258,8 @@ pub struct Prefs {
     pub player_screen: PlayerScreenPrefs,
     pub replay: ReplayPrefs,
     pub update: UpdatePrefs,
+    /// 手牌・河の入れ方（使わない・手動・自動判別→手動修正）
+    pub tile_mode: crate::tile_input::TileMode,
 }
 
 /// 更新（設定ウィンドウの「更新」タブ）

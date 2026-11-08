@@ -90,6 +90,8 @@ pub struct OperatorUi {
     cam: crate::cameras::CameraUi,
     /// ウィンドウの全画面切替（メニューバー・ツールバー）
     pub windows: crate::windows::WindowCtl,
+    /// 手牌・河の手入力（テンキー）
+    tiles: crate::tile_input::TileInput,
 }
 
 impl Default for OperatorUi {
@@ -134,6 +136,7 @@ impl Default for OperatorUi {
             remove_key: None,
             cam: Default::default(),
             windows: Default::default(),
+            tiles: Default::default(),
         }
     }
 }
@@ -243,10 +246,26 @@ pub fn operator_ui(
         use crate::prefs::pressed;
         let sc = cfg.prefs.shortcuts.clone();
         let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        if pressed(&keys, &sc.wall_down) {
+        // 手牌・河の手入力中は、テンキーはそちらで使う（残り牌数はツモで自動に減る）
+        let tile_mode = cfg.prefs.tile_mode;
+        let tiles_on = tile_mode != crate::tile_input::TileMode::Off
+            && table
+                .full
+                .as_ref()
+                .is_some_and(|f| f.state.phase == Phase::InHand);
+        let numpad = |k: &str| tiles_on && k.starts_with("Numpad");
+        if tiles_on {
+            let st = table.full.as_ref().map(|f| f.state.clone()).unwrap();
+            for k in crate::tile_input::NumKey::from_keys(&keys) {
+                if let Some(o) = u.tiles.key(k, &st, tile_mode, &*net) {
+                    tile_outcome(u, o, &net, &mut table);
+                }
+            }
+        }
+        if pressed(&keys, &sc.wall_down) && !numpad(&sc.wall_down) {
             net.act(Action::WallDecrement);
         }
-        if pressed(&keys, &sc.wall_up) {
+        if pressed(&keys, &sc.wall_up) && !numpad(&sc.wall_up) {
             net.act(Action::WallIncrement);
         }
         if ctrl && pressed(&keys, &sc.undo) {
@@ -576,6 +595,27 @@ pub fn operator_ui(
                 fix_panel(ui, u, &net, &state);
             }
             Phase::InHand => {
+                let mut mode = cfg.prefs.tile_mode;
+                let (key, picked, changed) = {
+                    let tex = &u.tex;
+                    let tb = |ui: &mut egui::Ui, t: Tile, w: f32| tile_button_tex(ui, tex, t, w);
+                    u.tiles.panel(ui, &state, &mut mode, &tb)
+                };
+                if changed {
+                    cfg.prefs.tile_mode = mode;
+                    if let Err(e) = cfg.save() {
+                        u.tiles.msg = Some(e);
+                    }
+                }
+                let o = match (key, picked) {
+                    (Some(k), _) => u.tiles.key(k, &state, mode, &*net),
+                    (_, Some(t)) => u.tiles.tile(t, &state, mode, &*net),
+                    _ => None,
+                };
+                if let Some(o) = o {
+                    tile_outcome(u, o, &net, &mut table);
+                }
+                ui.separator();
                 in_hand_panel(ui, u, &net, &state);
                 ui.separator();
                 win_panel(ui, u, &net, &mut table, &state);
@@ -627,8 +667,45 @@ fn palette(ui: &mut egui::Ui, u: &OperatorUi, w: f32, red: bool) -> Option<Tile>
     clicked
 }
 
+/// 手牌・河の手入力の結果（アガリ入力の欄を埋める・放送に出す）。
+fn tile_outcome(u: &mut OperatorUi, o: crate::tile_input::Outcome, net: &Net, table: &mut Table) {
+    use crate::tile_input::Outcome;
+    match o {
+        Outcome::Win(w) => {
+            u.win = w;
+            u.target = PaletteTarget::Closed;
+            table.preview = None;
+            u.preview_id = Some(net.preview(u.win.clone()));
+        }
+        Outcome::ConfirmWin => {
+            let ok = matches!((u.preview_id, &table.preview), (Some(id), Some((rid, Ok(_)))) if id == *rid);
+            if ok {
+                let mut wins = std::mem::take(&mut u.pending);
+                wins.push(u.win.clone());
+                net.act(Action::Win { wins });
+                u.win = empty_win();
+                u.preview_id = None;
+                u.tiles.sub = crate::tile_input::Sub::None;
+            } else {
+                u.tiles.msg = Some(
+                    "まだ計算できていません（アガリ入力の欄で手牌・役を確かめてプレビューしてください）".into(),
+                );
+            }
+        }
+    }
+}
+
 fn tile_button(ui: &mut egui::Ui, u: &OperatorUi, t: Tile, w: f32) -> egui::Response {
-    match u.tex.get(&t.to_string()) {
+    tile_button_tex(ui, &u.tex, t, w)
+}
+
+fn tile_button_tex(
+    ui: &mut egui::Ui,
+    tex: &HashMap<String, egui::TextureId>,
+    t: Tile,
+    w: f32,
+) -> egui::Response {
+    match tex.get(&t.to_string()) {
         Some(id) => ui
             .add(egui::Button::image(egui::Image::new(
                 egui::load::SizedTexture::new(*id, [w, w * 4.0 / 3.0]),
@@ -803,12 +880,17 @@ fn in_hand_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &Table
                 .strong(),
         );
         if ui
-            .button(egui::RichText::new("−1（テンキー −）").size(20.0))
+            .button(egui::RichText::new("−1").size(20.0))
+            .on_hover_text("テンキーの −（手牌・河を使わないとき。使うときはツモで自動に減る）")
             .clicked()
         {
             net.act(Action::WallDecrement);
         }
-        if ui.button("+1（テンキー +）").clicked() {
+        if ui
+            .button("+1")
+            .on_hover_text("テンキーの +（手牌・河を使わないとき）")
+            .clicked()
+        {
             net.act(Action::WallIncrement);
         }
         ui.add(egui::DragValue::new(&mut u.wall_direct).range(0..=state.config.wall_start));

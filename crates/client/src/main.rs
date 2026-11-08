@@ -24,6 +24,7 @@ mod scenes;
 mod settings;
 mod settings_prefs;
 mod theme;
+mod tile_input;
 mod ui_kit;
 mod update;
 mod windows;

@@ -722,6 +722,36 @@ fn draw_hand_frame(
                 ..default()
             });
         });
+        // 河（6枚ずつ折り返し。リーチ宣言牌は横向き、鳴かれた牌は暗く）
+        if !st.river.is_empty() {
+            let rows = st.river.len().div_ceil(6);
+            let w = (38.0f32).min(330.0 / (rows as f32 * 4.0 / 3.0 + 0.2 * rows as f32));
+            q.spawn(Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(8.0),
+                top: Val::Px(56.0),
+                width: Val::Px(456.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(w * 0.12),
+                ..default()
+            })
+            .with_children(|c| {
+                for row in st.river.chunks(6) {
+                    c.spawn(Node {
+                        width: Val::Px(w * 6.0 + w * 0.4),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::FlexEnd,
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        for t in row {
+                            k.tile(r, Some(t.tile), w, t.riichi, t.called);
+                        }
+                    });
+                }
+            });
+        }
         // 手牌（アガリ時は倒した手）・副露
         q.spawn(Node {
             position_type: PositionType::Absolute,
@@ -744,13 +774,20 @@ fn draw_hand_frame(
                     c.push(w.input.win_tile);
                     (c, &w.input.melds)
                 }
-                None => (vec![], &st.melds),
+                None => {
+                    // 手入力・自動読み取りの手牌（理牌して、ツモ牌は最後に離して置く）
+                    let mut c = st.hand.clone();
+                    c.sort_by_key(|t| t.sort_key());
+                    c.extend(st.drawn);
+                    (c, &st.melds)
+                }
             };
             let n_tiles = closed.len() + melds.iter().map(|m| m.tiles.len()).sum::<usize>() + 1;
             let w = (440.0 / n_tiles as f32).min(34.0);
             let last = closed.len().saturating_sub(1);
+            let gap_last = win.is_some() || st.drawn.is_some();
             for (i, t) in closed.iter().enumerate() {
-                if win.is_some() && i == last {
+                if gap_last && i == last {
                     r.spawn(Node {
                         width: Val::Px(w * 0.4),
                         ..default()

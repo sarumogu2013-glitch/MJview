@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::rules::GameConfig;
 use crate::scoring::WinInput;
 use crate::state::{Action, Player};
-use crate::tile::{SeatId, parse_tiles};
+use crate::tile::{SeatId, Tile, parse_tiles};
 
 fn player(name: &str, aff: Option<&str>) -> Player {
     Player {
@@ -100,9 +100,83 @@ pub fn actions() -> Vec<Action> {
             tiles: parse_tiles("3p").unwrap(),
         },
     ];
-    v.extend(std::iter::repeat_n(Action::WallDecrement, 28));
-    v.push(Action::Riichi { seat: SeatId(3) });
+    // 配牌・ツモ・打牌（牌の手入力の流れ）。最後は北家（席3）のリーチ宣言牌
+    v.extend(east3_tiles(parse_tiles("3p").unwrap()[0]));
     v
+}
+
+/// 東3局（親は席2）の配牌から、決まった順の山で29巡ぶんツモ・打牌する。
+fn east3_tiles(dora_indicator: Tile) -> Vec<Action> {
+    // 136枚（赤5を1枚ずつ）を決まった並びに混ぜる
+    let mut deck: Vec<Tile> = vec![];
+    for k in 0..34u8 {
+        for i in 0..4 {
+            let t = Tile::new(k);
+            let red = i == 0 && !t.is_honor() && t.number() == 5;
+            deck.push(if red { Tile::red_five(t.suit()) } else { t });
+        }
+    }
+    if let Some(i) = deck.iter().position(|t| *t == dora_indicator) {
+        deck.remove(i);
+    }
+    let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+    for i in (1..deck.len()).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        deck.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+    let mut wall = deck.into_iter();
+    let order = [SeatId(2), SeatId(3), SeatId(0), SeatId(1)];
+    let mut hands: [Vec<Tile>; 4] = Default::default();
+    let mut out = vec![];
+    for (n, seat) in order.iter().enumerate() {
+        let mut h: Vec<Tile> = wall.by_ref().take(13).collect();
+        h.sort_by_key(|t| t.sort_key());
+        let drawn = (n == 0).then(|| wall.next().unwrap());
+        out.push(Action::SetHand {
+            seat: *seat,
+            tiles: h.clone(),
+            drawn,
+        });
+        h.extend(drawn);
+        hands[seat.index()] = h;
+    }
+    // いらない牌（孤立した字牌 → 么九牌 → ツモ切り）
+    let pick = |h: &[Tile], drawn: Tile| -> Tile {
+        let count = |t: Tile| h.iter().filter(|x| x.kind() == t.kind()).count();
+        h.iter()
+            .copied()
+            .filter(|t| t.is_honor() && count(*t) == 1)
+            .chain(
+                h.iter()
+                    .copied()
+                    .filter(|t| t.is_terminal_or_honor() && count(*t) == 1),
+            )
+            .next()
+            .unwrap_or(drawn)
+    };
+    let discard =
+        |out: &mut Vec<Action>, h: &mut Vec<Tile>, seat: SeatId, drawn: Tile, riichi: bool| {
+            let t = pick(h, drawn);
+            let i = h.iter().position(|x| *x == t).unwrap();
+            h.remove(i);
+            out.push(Action::Discard {
+                seat,
+                tile: t,
+                riichi,
+            });
+        };
+    let first = *hands[2].last().unwrap();
+    discard(&mut out, &mut hands[2], SeatId(2), first, false);
+    for turn in 0..29 {
+        let seat = order[(turn + 1) % 4];
+        let t = wall.next().unwrap();
+        out.push(Action::Tsumo { seat, tile: t });
+        hands[seat.index()].push(t);
+        discard(&mut out, &mut hands[seat.index()], seat, t, turn == 28);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -118,5 +192,7 @@ mod tests {
         }
         assert_eq!(s.seats[3].player.name, "高橋 美咲");
         assert!(s.seats[3].riichi);
+        assert!(s.seats.iter().all(|x| x.hand_known && x.tile_count() == 13));
+        assert_eq!(s.wall_remaining, 70 - 1 - 29);
     }
 }
