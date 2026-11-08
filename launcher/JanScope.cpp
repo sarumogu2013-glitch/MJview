@@ -78,7 +78,6 @@ enum : UINT {
 
 enum : UINT {
     WM_APP_UPDATE_INFO = WM_APP + 1,  // lParam: UpdateInfo*
-    WM_APP_UPDATE_DONE,               // wParam: 終了コード, lParam: std::wstring*（出力）
 };
 
 enum { TIMER_CHILDREN = 1, TIMER_EMBED = 2 };
@@ -114,6 +113,24 @@ static std::wstring ExePath() {
     return std::wstring(buf, n);
 }
 static std::wstring InDir(const std::wstring& name) { return ExeDir() + L"\\" + name; }
+static std::wstring TempDir() {
+    wchar_t buf[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, buf);
+    return n ? std::wstring(buf, n) : ExeDir() + L"\\";
+}
+/// 更新に使う、一時フォルダに写した janscope-server.exe
+static std::wstring UpdaterPath() { return TempDir() + L"janscope-updater-" + std::to_wstring(GetCurrentProcessId()) + L".exe"; }
+/// 前回の更新で写した exe を消す（動いていれば消えないので、次の起動でまた試す）
+static void CleanupUpdaters() {
+    std::wstring t = TempDir();
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((t + L"janscope-updater-*.exe").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        DeleteFileW((t + fd.cFileName).c_str());
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
 static bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 
 /// 配布フォルダの VERSION.txt、なければビルド時の版
@@ -751,18 +768,36 @@ static void ApplyUpdate() {
         return;
     }
     std::wstring msg = L"新しい版 " + g_update.latest + L" に入れ替えます（今は " + g_update.current +
-                       L"）。\n\n設定・選手・対局ログ・ffmpeg・JanScope.ini はそのまま残ります。\n配信中・対局中は入れ替えないでください。\n\n入れ替えますか？";
+                       L"）。\n\nランチャーはいったん終了し、入れ替えが終わると自動で起動し直します（経過は別の窓に出ます）。\n設定・選手・対局ログ・ffmpeg・JanScope.ini はそのまま残ります。\n配信中・対局中は入れ替えないでください。\n\n入れ替えますか？";
     if (MessageBoxW(g_main, msg.c_str(), L"JanScope の更新", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+    // ランチャー自身（JanScope.exe）も入れ替えるので、入れ替えは一時フォルダに写した janscope-server.exe に任せて、
+    // ランチャーは終わる。写した exe はランチャーが終わるのを待ってから入れ替え、終わったらランチャーを起動し直す
+    std::wstring upd = UpdaterPath();
+    if (!CopyFileW(InDir(L"janscope-server.exe").c_str(), upd.c_str(), FALSE)) {
+        wchar_t buf[64];
+        swprintf(buf, 64, L"（エラー %lu）", GetLastError());
+        Error(L"更新の準備ができませんでした" + std::wstring(buf) + L"\n\n" + upd);
+        return;
+    }
+    std::wstring dir = ExeDir();
+    if (!dir.empty() && dir.back() == L'\\') dir += L".";
+    std::wstring cmd = L"\"" + upd + L"\" --update --install-dir \"" + dir + L"\" --wait-exe \"" + ExePath() +
+                       L"\" --restart \"" + ExePath() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::wstring tmp = TempDir();
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, tmp.c_str(), &si, &pi)) {
+        wchar_t buf[64];
+        swprintf(buf, 64, L"（エラー %lu）", GetLastError());
+        Error(L"更新を始められませんでした" + std::wstring(buf));
+        DeleteFileW(upd.c_str());
+        return;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
     g_updating = true;
-    SetStatus(1, L"新しい版を取ってきています…（しばらくかかります）");
-    for (HWND b : g_buttons) EnableWindow(b, FALSE);
-    HWND hwnd = g_main;
-    std::thread([hwnd] {
-        std::string out;
-        DWORD code = 1;
-        RunCapture(L"--update", out, code);
-        PostMessageW(hwnd, WM_APP_UPDATE_DONE, code, (LPARAM) new std::wstring(Widen(out)));
-    }).detach();
+    DestroyWindow(g_main);
 }
 
 static void Open(const std::wstring& target) {
@@ -1138,32 +1173,6 @@ static void OnUpdateInfo(UpdateInfo* info, bool manual) {
     InvalidateRect(g_main, nullptr, TRUE);
 }
 
-static void OnUpdateDone(DWORD code, std::wstring* out) {
-    g_updating = false;
-    for (HWND b : g_buttons) EnableWindow(b, TRUE);
-    std::wstring o = Trim(*out);
-    delete out;
-    if (code == 0) {
-        SetStatus(1, L"入れ替えました。起動し直すと新しい版になります");
-        if (MessageBoxW(g_main, (o + L"\n\nJanScope を起動し直しますか？").c_str(), L"JanScope の更新", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
-            STARTUPINFOW si{};
-            si.cb = sizeof(si);
-            PROCESS_INFORMATION pi{};
-            std::wstring cmd = L"\"" + ExePath() + L"\"";
-            std::wstring dir = ExeDir();
-            if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
-                CloseHandle(pi.hThread);
-                CloseHandle(pi.hProcess);
-                DestroyWindow(g_main);
-            }
-        }
-    } else {
-        SetStatus(1, L"入れ替えられませんでした（元のままです）");
-        Error(L"入れ替えられませんでした（元のままです）。\n\n" + o);
-    }
-    UpdateMenuState();
-}
-
 /// 牌譜の URL を開いて取り込む。取り込み中なら、その Chrome の新しいタブに開く
 static void OpenMajsoulUrl() {
     bool running = Running(ID_MAJSOUL) != nullptr;
@@ -1303,7 +1312,6 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         case WM_COMMAND: OnCommand(LOWORD(w)); return 0;
         case WM_APP_UPDATE_INFO: OnUpdateInfo((UpdateInfo*)l, w != 0); return 0;
-        case WM_APP_UPDATE_DONE: OnUpdateDone((DWORD)w, (std::wstring*)l); return 0;
         case WM_CLOSE:
             if (!g_children.empty() &&
                 MessageBoxW(h, std::any_of(g_children.begin(), g_children.end(), [](const Child& c) { return c.embedded != nullptr; }) ? L"このウィンドウの中の操作画面（と出力ウィンドウ）も閉じます。サーバーなど別のウィンドウのものは動いたままです。\n閉じますか？"
@@ -1325,6 +1333,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     InitCommonControlsEx(&icc);
     g_version = Version();
     g_set = LoadSettings();
+    CleanupUpdaters();
 
     WNDCLASSEXW wc{sizeof(wc)};
     wc.lpfnWndProc = MainProc;

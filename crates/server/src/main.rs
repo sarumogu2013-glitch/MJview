@@ -56,8 +56,68 @@ fn print_update_info() {
 }
 
 /// 新しい版を取ってきて入れ替える
-fn run_update() -> i32 {
-    let Some(dir) = janscope_update::install_dir() else {
+/// `--update` のあとのオプション（ランチャーから呼ぶとき）
+#[derive(Default)]
+struct UpdateOpts {
+    /// 入れ替える配布フォルダ（既定はこの exe のフォルダ）。ランチャーはこの exe を一時フォルダに写して動かす
+    install_dir: Option<PathBuf>,
+    /// この exe（ランチャー）が終わるのを待ってから入れ替える
+    wait_exe: Option<PathBuf>,
+    /// 終わったら起動し直す exe
+    restart: Option<PathBuf>,
+}
+
+/// 実行中の exe は書き込みで開けない（Windows）。開けるようになったら終わったとみなす
+fn wait_until_closed(exe: &std::path::Path) -> bool {
+    println!("ランチャーが終わるのを待っています…");
+    for _ in 0..120 {
+        if !exe.exists() || std::fs::OpenOptions::new().append(true).open(exe).is_ok() {
+            // 終わった直後はまだファイルをつかんでいることがあるので、少し待つ
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    false
+}
+
+fn run_update_with(opts: UpdateOpts) -> i32 {
+    if let Some(w) = &opts.wait_exe {
+        if !wait_until_closed(w) {
+            eprintln!(
+                "{} が終わらないので入れ替えません（ランチャーを閉じてから、もう一度更新してください）",
+                w.display()
+            );
+            return finish_update(&opts, 1);
+        }
+    }
+    let code = run_update(opts.install_dir.clone());
+    finish_update(&opts, code)
+}
+
+/// 結果を見せて、ランチャーを起動し直す
+fn finish_update(opts: &UpdateOpts, code: i32) -> i32 {
+    let Some(r) = &opts.restart else { return code };
+    if code == 0 {
+        println!("ランチャーを起動し直します…");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    } else {
+        println!("Enter を押すと閉じて、ランチャーを起動し直します（元の版のまま）");
+        let mut l = String::new();
+        let _ = std::io::stdin().read_line(&mut l);
+    }
+    let mut cmd = std::process::Command::new(r);
+    if let Some(d) = r.parent() {
+        cmd.current_dir(d);
+    }
+    if let Err(e) = cmd.spawn() {
+        eprintln!("ランチャーを起動できません（{}）: {e}", r.display());
+    }
+    code
+}
+
+fn run_update(install_dir: Option<PathBuf>) -> i32 {
+    let Some(dir) = install_dir.or_else(janscope_update::install_dir) else {
         eprintln!("実行ファイルの場所が分かりません");
         return 1;
     };
@@ -109,6 +169,7 @@ fn usage() -> ! {
          \x20 --no-update-check  起動時に新しい版を確かめない\n\
          \x20 --check-update     新しい版があるか確かめて終わる\n\
          \x20 --update           新しい版を取ってきて入れ替えて終わる（配信中は使わないこと）\n\
+         \x20     [--install-dir <フォルダ>] [--wait-exe <exe>] [--restart <exe>]  ランチャー用: exe が終わるのを待ってから入れ替え、終わったら起動し直す\n\
          \x20 --update-info      新しい版の情報を JSON で出して終わる（ランチャー用）\n\n\
          ソース: {REPO_URL}（MIT OR Apache-2.0。同梱物のライセンスは THIRD_PARTY_LICENSES.md）"
     );
@@ -164,7 +225,19 @@ async fn main() {
                 print_update_check();
                 return;
             }
-            "--update" => std::process::exit(run_update()),
+            "--update" => {
+                let mut o = UpdateOpts::default();
+                while let Some(x) = args.next() {
+                    let v = args.next().map(PathBuf::from).unwrap_or_else(|| usage());
+                    match x.as_str() {
+                        "--install-dir" => o.install_dir = Some(v),
+                        "--wait-exe" => o.wait_exe = Some(v),
+                        "--restart" => o.restart = Some(v),
+                        _ => usage(),
+                    }
+                }
+                std::process::exit(run_update_with(o))
+            }
             "--update-info" => {
                 print_update_info();
                 return;
