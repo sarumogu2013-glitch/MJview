@@ -180,6 +180,7 @@ fn wall_and_kan() {
             seat: B,
             kind: KanKind::Ankan,
             new_dora_indicator: Some(ind),
+            tiles: vec![],
         },
     )
     .unwrap();

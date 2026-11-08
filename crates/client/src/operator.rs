@@ -883,6 +883,7 @@ fn in_hand_panel(ui: &mut egui::Ui, u: &mut OperatorUi, net: &Net, state: &Table
                     seat,
                     kind: u.kan_kind,
                     new_dora_indicator: u.kan_dora.take(),
+                    tiles: vec![],
                 });
             }
         });

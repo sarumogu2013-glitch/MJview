@@ -357,6 +357,7 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
                         seat: SeatId(int(b, "seat") as u8),
                         kind: KanKind::Minkan,
                         new_dora_indicator: None,
+                        tiles: vec![],
                     });
                 }
                 c.sync_dora(b);
@@ -375,6 +376,7 @@ pub fn convert(head: &Value, recs: &[Record], anonymize: bool) -> Result<Importe
                     seat: SeatId(seat),
                     kind,
                     new_dora_indicator: None,
+                    tiles: vec![],
                 });
                 c.sync_dora(b);
             }

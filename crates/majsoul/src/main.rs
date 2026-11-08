@@ -13,6 +13,16 @@ use std::sync::{Arc, Mutex};
 use janscope_majsoul::capture::{self, Event, Shared};
 use janscope_majsoul::convert;
 
+/// ログの時刻（取り込みを始めてからの 分:秒）
+fn now() -> String {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let s = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs();
+    format!("[{:02}:{:02}]", s / 60, s % 60)
+}
+
 fn usage() -> ! {
     eprintln!(
         "janscope-majsoul {}\n\n雀魂の牌譜を取り込んで、JanScope のダミーデータ（対局履歴）にします。\n\n\
@@ -98,6 +108,8 @@ fn main() {
     );
     println!(" 保存先: {}", out.display());
     println!("==============================================");
+    println!(" ここに読み取りの経過が出ます（[分:秒] は起動からの時間）");
+    now();
     let browser = match capture::launch(&chrome, &profile) {
         Ok(b) => b,
         Err(e) => {
@@ -149,13 +161,19 @@ fn main() {
     let mut saved = 0;
     for ev in rx {
         match ev {
-            Event::Schema(p) => println!("型定義を読み取りました（{}）", p.display()),
+            Event::Schema(p) => println!("{} 型定義を読み取りました（{}）", now(), p.display()),
             Event::Info(m) if m == "__closed__" => break,
-            Event::Info(m) => println!("{m}"),
+            Event::Info(m) => println!("{} {m}", now()),
             Event::GameRecord(res) => {
                 let schema = match shared.lock().unwrap().schema.clone() {
                     Some(s) => s,
-                    None => continue,
+                    None => {
+                        println!(
+                            "{} 型定義がないので、この牌譜は読めません（ページを再読み込みしてください）",
+                            now()
+                        );
+                        continue;
+                    }
                 };
                 let result = (|| -> Result<(PathBuf, convert::Imported), String> {
                     let head = res.get("head").cloned().unwrap_or_default();
@@ -177,7 +195,8 @@ fn main() {
                     Ok((path, imp)) => {
                         saved += 1;
                         println!(
-                            "保存しました: {}（{} 手）",
+                            "{} 保存しました: {}（{} 手）",
+                            now(),
                             path.display(),
                             imp.actions.len()
                         );
@@ -188,7 +207,7 @@ fn main() {
                             println!("   メモ: ほか {} 件", imp.notes.len() - 5);
                         }
                     }
-                    Err(e) => println!("この牌譜は取り込めませんでした: {e}"),
+                    Err(e) => println!("{} この牌譜は取り込めませんでした: {e}", now()),
                 }
             }
         }

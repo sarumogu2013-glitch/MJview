@@ -209,6 +209,8 @@ pub struct Shared {
     /// 型定義がまだないときのフレーム（送った=true / 受け取った=false、中身）
     backlog: Vec<(bool, Vec<u8>)>,
     tracker: Tracker,
+    /// 型定義を待っていることを知らせた
+    told_waiting: bool,
 }
 
 impl Shared {
@@ -222,12 +224,20 @@ impl Shared {
             schema_file,
             backlog: vec![],
             tracker: Tracker::default(),
+            told_waiting: false,
         }
     }
 
     fn frame(&mut self, sent: bool, data: Vec<u8>, tx: &Sender<Event>) {
         let Some(schema) = self.schema.clone() else {
             self.backlog.push((sent, data));
+            if !self.told_waiting {
+                self.told_waiting = true;
+                let _ = tx.send(Event::Info(
+                    "ゲームの通信を受け取っています。型定義がまだないので、届くまでためておきます"
+                        .into(),
+                ));
+            }
             if self.backlog.len() > 2000 {
                 self.backlog.drain(..500);
             }
@@ -237,17 +247,64 @@ impl Shared {
     }
 
     fn handle(&mut self, schema: &Schema, sent: bool, data: &[u8], tx: &Sender<Event>) {
+        let info = |m: String| {
+            let _ = tx.send(Event::Info(m));
+        };
         if sent {
-            self.tracker.on_sent(schema, data);
-        } else if let Some(Message { name, body }) = self.tracker.on_received(schema, data) {
-            if name.ends_with("fetchGameRecord") {
+            if let Some(name) = self.tracker.on_sent(schema, data) {
+                if name.ends_with("fetchGameRecord") {
+                    info("牌譜を要求しました。応答を待っています…".into());
+                }
+            }
+            return;
+        }
+        let Some(Message { name, body }) = self.tracker.on_received(schema, data) else {
+            return;
+        };
+        let short = name.rsplit('.').next().unwrap_or(&name);
+        if body.is_null() {
+            if short == "fetchGameRecord" {
+                info("牌譜の応答を読めませんでした（型定義が合っていない可能性があります。ページを再読み込みしてください）".into());
+            }
+            return;
+        }
+        let err = body
+            .pointer("/error/code")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        match short {
+            "fetchGameRecord" if err != 0 => {
+                info(format!("牌譜を取得できませんでした（雀魂のエラー {err}）"))
+            }
+            "fetchGameRecord" => {
+                info("牌譜を受け取りました。変換します…".into());
                 let _ = tx.send(Event::GameRecord(body));
             }
+            "fetchGameRecordList" | "fetchGameRecordsDetail" if err == 0 => {
+                let n = body
+                    .get("record_list")
+                    .and_then(Value::as_array)
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                info(format!(
+                    "牌譜一覧を読み込みました（{n} 件）。取り込みたい対局を開いてください"
+                ));
+            }
+            "login" | "oauth2Login" | "emailLogin" | "loginBeat" if err == 0 => {
+                info("雀魂にログインしました".into())
+            }
+            "login" | "oauth2Login" | "emailLogin" => {
+                info(format!("ログインできませんでした（雀魂のエラー {err}）"))
+            }
+            _ => {}
         }
     }
 
     fn set_schema(&mut self, text: &str, tx: &Sender<Event>) {
         match Schema::from_json(text) {
+            Err(e) => {
+                let _ = tx.send(Event::Info(format!("型定義を読めませんでした: {e}")));
+            }
             Ok(s) if s.types.contains_key("lq.Wrapper") => {
                 let s = Arc::new(s);
                 if let Some(p) = self.schema_file.parent() {
@@ -313,6 +370,11 @@ pub fn watch_page(
         // 返事（getResponseBody）
         if let Some(id) = v.get("id").and_then(Value::as_u64) {
             if body_calls.remove(&id).is_some() {
+                if let Some(e) = v.pointer("/error/message").and_then(Value::as_str) {
+                    let _ = tx.send(Event::Info(format!(
+                        "型定義の中身を取れませんでした（{e}）。ページを再読み込みしてください"
+                    )));
+                }
                 if let Some(r) = v.get("result") {
                     let body = r.get("body").and_then(Value::as_str).unwrap_or("");
                     let text = if r.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
@@ -338,12 +400,40 @@ pub fn watch_page(
                 .unwrap_or("");
             eprintln!("[debug] {method} {url}");
         }
+        let info = |m: String| {
+            let _ = tx.send(Event::Info(m));
+        };
         match method {
+            "Network.webSocketCreated" => {
+                info("ゲームのサーバーにつなぎました（通信を読んでいます）".into());
+            }
+            "Network.webSocketClosed" => info("ゲームのサーバーとの接続が切れました".into()),
+            "Network.loadingFailed" => {
+                if let Some(id) = p.get("requestId").and_then(Value::as_str) {
+                    if liqi_requests.remove(id) {
+                        info(
+                            "型定義の読み込みに失敗しました（ページを再読み込みしてください）"
+                                .into(),
+                        );
+                    }
+                }
+            }
             "Network.responseReceived" => {
                 let url = p
                     .pointer("/response/url")
                     .and_then(Value::as_str)
                     .unwrap_or("");
+                if p.get("type").and_then(Value::as_str) == Some("Document") {
+                    let status = p
+                        .pointer("/response/status")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    if status >= 400 {
+                        info(format!("ページを開けませんでした（{status}）: {url}"));
+                    } else if !url.starts_with("about:") {
+                        info(format!("ページを開きました: {url}"));
+                    }
+                }
                 let file = url
                     .rsplit('/')
                     .next()
@@ -354,6 +444,7 @@ pub fn watch_page(
                 if file.starts_with("liqi") && file.ends_with(".json") {
                     if let Some(id) = p.get("requestId").and_then(Value::as_str) {
                         liqi_requests.insert(id.to_string());
+                        info("型定義（liqi.json）を読み込んでいます…".into());
                     }
                 }
             }
@@ -408,8 +499,14 @@ pub fn watch_all(
             if watching.insert(id) {
                 let (sh, tx2, nav) = (shared.clone(), tx.clone(), first.take());
                 std::thread::spawn(move || {
-                    if let Err(e) = watch_page(&ws, sh, tx2.clone(), nav) {
-                        let _ = tx2.send(Event::Info(e));
+                    let _ = tx2.send(Event::Info("Chrome のタブにつなぎました".into()));
+                    match watch_page(&ws, sh, tx2.clone(), nav) {
+                        Ok(()) => {
+                            let _ = tx2.send(Event::Info("タブが閉じられました".into()));
+                        }
+                        Err(e) => {
+                            let _ = tx2.send(Event::Info(e));
+                        }
                     }
                 });
             }

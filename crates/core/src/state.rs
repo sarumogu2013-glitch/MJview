@@ -91,10 +91,14 @@ pub enum Action {
     CancelRiichi {
         seat: SeatId,
     },
+    /// 槓（残り牌数 −1）。tiles は牌の手入力のとき、手牌から出す牌（暗槓4枚・大明槓3枚・加槓1枚）。
+    /// 空なら残り牌数とドラだけを扱う（手牌を追っていないとき）
     Kan {
         seat: SeatId,
         kind: KanKind,
         new_dora_indicator: Option<Tile>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tiles: Vec<Tile>,
     },
     SetDora {
         tiles: Vec<Tile>,
@@ -130,6 +134,36 @@ pub enum Action {
     },
     /// 半荘を途中で打ち切って終了（時間切れなど）
     EndGame,
+    /// 手牌の登録・修正（牌の手入力。配牌の登録にも使う）。drawn はツモ牌（親の配牌の14枚目など）
+    SetHand {
+        seat: SeatId,
+        tiles: Vec<Tile>,
+        #[serde(default)]
+        drawn: Option<Tile>,
+    },
+    /// ツモ（牌の手入力）。残り牌数を1減らす（槓のあとの嶺上牌は減らさない）
+    Tsumo {
+        seat: SeatId,
+        tile: Tile,
+    },
+    /// 打牌（牌の手入力）。riichi なら立直の宣言牌（立直と同じく供託が入る）
+    Discard {
+        seat: SeatId,
+        tile: Tile,
+        #[serde(default)]
+        riichi: bool,
+    },
+    /// チー・ポン（牌の手入力）。直前の打牌を鳴く。tiles は手牌から出す2枚
+    Call {
+        seat: SeatId,
+        kind: crate::scoring::MeldKind,
+        tiles: Vec<Tile>,
+    },
+    /// 河の修正（牌の手入力）
+    SetRiver {
+        seat: SeatId,
+        river: Vec<RiverTile>,
+    },
     /// 対局中にルールを差し替える（設定UIのルールタブ。点数は変えず、以後の計算と進行に使う）
     SetConfig {
         config: GameConfig,
@@ -141,9 +175,57 @@ pub struct SeatState {
     pub player: Player,
     pub score: i32,
     pub riichi: bool,
-    /// 副露（手入力・自動読み取りの結果。段階Cで手牌と一緒に使う）
+    /// 副露（手入力・自動読み取りの結果）
     #[serde(default)]
     pub melds: Vec<Meld>,
+    /// 手牌（門前部分。ツモ牌は含めない）。牌の手入力・自動読み取りの結果
+    #[serde(default)]
+    pub hand: Vec<Tile>,
+    /// ツモ牌（打牌するまで手牌とは分けて持つ）
+    #[serde(default)]
+    pub drawn: Option<Tile>,
+    #[serde(default)]
+    pub river: Vec<RiverTile>,
+    /// この局の手牌が登録済み（配牌の登録が終わった）
+    #[serde(default)]
+    pub hand_known: bool,
+}
+
+impl SeatState {
+    /// 手牌＋ツモ牌＋副露（槓も3枚と数える）の枚数。打牌の前は14、後は13
+    pub fn tile_count(&self) -> usize {
+        self.hand.len() + self.drawn.is_some() as usize + 3 * self.melds.len()
+    }
+}
+
+/// 河の牌1枚。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RiverTile {
+    pub tile: Tile,
+    /// 立直の宣言牌（横向き）
+    #[serde(default)]
+    pub riichi: bool,
+    /// 鳴かれた（暗く表示）
+    #[serde(default)]
+    pub called: bool,
+    /// ツモ切り
+    #[serde(default)]
+    pub tsumogiri: bool,
+}
+
+/// 牌の手入力で、次に入れるもの（engine が操作のたびに決める）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Turn {
+    /// 牌を追っていない、または配牌の登録中
+    #[default]
+    None,
+    /// seat の打牌（ツモのあと・鳴いたあと）
+    Discard { seat: SeatId },
+    /// seat が打牌した直後（鳴き・ロン、なければ下家のツモ）
+    AfterDiscard { seat: SeatId },
+    /// seat のツモ（rinshan: 槓のあとの嶺上牌）
+    Tsumo { seat: SeatId, rinshan: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +303,9 @@ pub struct TableState {
     pub final_results: Option<Vec<FinalResult>>,
     /// 西入・延長中
     pub extension: bool,
+    /// 牌の手入力の手番
+    #[serde(default)]
+    pub turn: Turn,
 }
 
 impl Default for TableState {
@@ -230,6 +315,10 @@ impl Default for TableState {
             score: 0,
             riichi: false,
             melds: vec![],
+            hand: vec![],
+            drawn: None,
+            river: vec![],
+            hand_known: false,
         };
         TableState {
             config: GameConfig::default(),
@@ -248,6 +337,7 @@ impl Default for TableState {
             last_deltas: [0; 4],
             final_results: None,
             extension: false,
+            turn: Turn::None,
         }
     }
 }

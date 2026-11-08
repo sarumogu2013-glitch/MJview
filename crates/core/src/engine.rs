@@ -130,7 +130,12 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
             for seat in &mut s.seats {
                 seat.riichi = false;
                 seat.melds.clear();
+                seat.hand.clear();
+                seat.drawn = None;
+                seat.river.clear();
+                seat.hand_known = false;
             }
+            s.turn = Turn::None;
             s.phase = Phase::InHand;
             Ok(vec![Overlay::HandStarted])
         }
@@ -188,12 +193,16 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
         }
         Kan {
             seat,
-            kind: _,
+            kind,
             new_dora_indicator,
+            tiles,
         } => {
             need_phase(s, &[Phase::InHand], "槓")?;
             if s.kans_this_hand >= 4 {
                 return invalid("この局の槓はすでに4回です");
+            }
+            if !tiles.is_empty() {
+                crate::hands::kan(s, *seat, *kind, tiles)?;
             }
             s.kans_this_hand += 1;
             s.wall_remaining = s.wall_remaining.saturating_sub(1);
@@ -204,6 +213,45 @@ fn apply_inner(s: &mut TableState, action: &Action) -> Result<Vec<Overlay>, Engi
                 s.dora_indicators.push(*t);
             }
             Ok(vec![Overlay::Kan { seat: *seat }])
+        }
+        SetHand { seat, tiles, drawn } => {
+            need_phase(s, &[Phase::InHand], "手牌の登録")?;
+            crate::hands::set_hand(s, *seat, tiles, *drawn)?;
+            Ok(vec![])
+        }
+        Tsumo { seat, tile } => {
+            need_phase(s, &[Phase::InHand], "ツモ")?;
+            crate::hands::tsumo(s, *seat, *tile)?;
+            Ok(vec![])
+        }
+        Discard { seat, tile, riichi } => {
+            need_phase(s, &[Phase::InHand], "打牌")?;
+            if *riichi {
+                let st = &mut s.seats[seat.index()];
+                if st.riichi {
+                    return invalid(format!("{}はすでに立直しています", st.player.name));
+                }
+                st.riichi = true;
+                st.score -= 1_000;
+                s.kyotaku += 1;
+            }
+            crate::hands::discard(s, *seat, *tile, *riichi)?;
+            Ok(if *riichi {
+                vec![Overlay::Riichi { seat: *seat }]
+            } else {
+                vec![]
+            })
+        }
+        Call { seat, kind, tiles } => {
+            need_phase(s, &[Phase::InHand], "鳴き")?;
+            crate::hands::call(s, *seat, *kind, tiles)?;
+            Ok(vec![])
+        }
+        SetRiver { seat, river } => {
+            need_phase(s, &[Phase::InHand], "河の修正")?;
+            s.seats[seat.index()].river = river.clone();
+            crate::hands::check_counts(s)?;
+            Ok(vec![])
         }
         SetDora { tiles } => {
             need_phase(s, &[Phase::InHand], "ドラ表示牌の入力")?;

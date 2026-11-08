@@ -33,14 +33,15 @@ fn wrapper(schema: &Schema, b: &[u8]) -> Option<(String, Vec<u8>)> {
 }
 
 impl Tracker {
-    /// ブラウザが送ったフレーム（要求）を覚える
-    pub fn on_sent(&mut self, schema: &Schema, frame: &[u8]) {
+    /// ブラウザが送ったフレーム（要求）を覚える。要求の名前を返す
+    pub fn on_sent(&mut self, schema: &Schema, frame: &[u8]) -> Option<String> {
         if frame.len() < 3 || frame[0] != 2 {
-            return;
+            return None;
         }
         let idx = u16::from_le_bytes([frame[1], frame[2]]);
-        if let Some((name, _)) = wrapper(schema, &frame[3..]) {
-            self.pending.insert(idx, name);
+        let (name, _) = wrapper(schema, &frame[3..])?;
+        {
+            self.pending.insert(idx, name.clone());
             // 古いものは捨てる（応答が来なかった要求）
             if self.pending.len() > 256 {
                 let keys: Vec<u16> = self.pending.keys().copied().take(64).collect();
@@ -49,9 +50,11 @@ impl Tracker {
                 }
             }
         }
+        Some(name)
     }
 
-    /// ブラウザが受け取ったフレーム。要求への応答か通知なら中身を返す
+    /// ブラウザが受け取ったフレーム。要求への応答か通知なら中身を返す。
+    /// 応答の中身が型定義で読めなかったときは、body を Null にして返す
     pub fn on_received(&mut self, schema: &Schema, frame: &[u8]) -> Option<Message> {
         match *frame.first()? {
             1 => {
@@ -63,8 +66,9 @@ impl Tracker {
                 let idx = u16::from_le_bytes([frame[1], frame[2]]);
                 let method = self.pending.remove(&idx)?;
                 let res = schema.methods.get(&method)?.response.clone();
-                let (_, data) = wrapper(schema, &frame[3..])?;
-                let body = schema.decode(&res, &data).ok()?;
+                let body = wrapper(schema, &frame[3..])
+                    .and_then(|(_, data)| schema.decode(&res, &data).ok())
+                    .unwrap_or(Value::Null);
                 Some(Message { name: method, body })
             }
             _ => None,
