@@ -75,10 +75,12 @@ enum : UINT {
     ID_VIEW_BROADCAST,
     ID_VIEW_INPUT,
     ID_VIEW_DEMO,
+    ID_LOG,  // サーバーログの表示・非表示
 };
 
 enum : UINT {
     WM_APP_UPDATE_INFO = WM_APP + 1,  // lParam: UpdateInfo*
+    WM_APP_LOG,                       // lParam: std::string*（サーバーの出力、UTF-8）
 };
 
 enum { TIMER_CHILDREN = 1, TIMER_EMBED = 2 };
@@ -222,6 +224,11 @@ static std::vector<HWND> g_buttons;
 static int g_barH = 0;
 // いまメインウィンドウに見せている操作ウィンドウ（埋め込みは複数できる。見せるのは1つ）
 static HWND g_embedded = nullptr;
+// サーバーログ（メインウィンドウの中のコンソール）。操作画面がないときは画面の大部分、操作画面があるときは下側に収まる
+static HWND g_log = nullptr;
+static bool g_logVisible = true;  // ツールバーの「サーバーログ」
+static bool g_logUsed = false;    // 一度でもサーバーを起動した（ログがある）
+static HFONT g_fontLog = nullptr;
 static HFONT g_font, g_fontTitle, g_fontSmall;
 static Settings g_set;
 static std::vector<Child> g_children;
@@ -250,8 +257,19 @@ static Child* Running(UINT fn) {
     return nullptr;
 }
 
-/// exe を起動する。console=true ならコンソール（サーバーの接続コードなどが見える窓）を出す
-static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console) {
+/// 子の出力を読んで、メインウィンドウのサーバーログに送る（別スレッド）
+static void ReadOutput(HANDLE rd, HWND hwnd) {
+    char buf[4096];
+    DWORD n = 0;
+    while (ReadFile(rd, buf, sizeof(buf), &n, nullptr) && n > 0) PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string(buf, n));
+    CloseHandle(rd);
+    PostMessageW(hwnd, WM_APP_LOG, 0, (LPARAM) new std::string("\n（サーバーが終了しました）\n"));
+}
+
+/// exe を起動する。console=true ならコンソール（接続コードなどが見える窓）を出す。
+/// capture=true なら出力をメインウィンドウのサーバーログに出す（窓は出さない）
+static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe, const std::wstring& args, bool console,
+                     bool capture = false) {
     std::wstring path = InDir(exe);
     if (!Exists(path)) {
         Error(exe + L" が見つかりません。\nJanScope.exe と同じフォルダに置いてください。\n\n" + path);
@@ -261,15 +279,35 @@ static Child* Launch(UINT fn, const std::wstring& title, const std::wstring& exe
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    DWORD flags = console ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW;
+    DWORD flags = console && !capture ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW;
     std::wstring dir = ExeDir();
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, flags, nullptr, dir.c_str(), &si, &pi)) {
+    HANDLE rd = nullptr, wr = nullptr;
+    if (capture) {
+        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+        if (CreatePipe(&rd, &wr, &sa, 0)) {
+            SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdOutput = wr;
+            si.hStdError = wr;
+            si.hStdInput = nullptr;
+        } else {
+            capture = false;
+        }
+    }
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, capture ? TRUE : FALSE, flags, nullptr, dir.c_str(), &si, &pi)) {
         wchar_t buf[64];
         swprintf(buf, 64, L"（エラー %lu）", GetLastError());
         Error(title + L" を起動できませんでした" + buf);
+        if (rd) CloseHandle(rd);
+        if (wr) CloseHandle(wr);
         return nullptr;
     }
     CloseHandle(pi.hThread);
+    if (capture) {
+        CloseHandle(wr);
+        HWND hwnd = g_main;
+        std::thread([rd, hwnd] { ReadOutput(rd, hwnd); }).detach();
+    }
     Child c;
     c.name = title;
     c.process = pi.hProcess;
@@ -309,10 +347,74 @@ static RECT ContentRect() {
     return rc;
 }
 
-static void FitEmbedded() {
-    if (!g_embedded) return;
+/// サーバーログを出すか
+static bool LogShown() { return g_log && g_logVisible && g_logUsed; }
+
+/// サーバーログの場所（操作画面があれば下側のコンソール、なければ画面の大部分）
+static RECT LogRect() {
     RECT rc = ContentRect();
+    int h = rc.bottom - rc.top;
+    int lh = g_embedded ? std::max(MulDiv(140, GetDpiForWindow(g_main), 96), h / 4) : h * 3 / 5;
+    rc.top = rc.bottom - std::min(lh, h);
+    return rc;
+}
+
+/// 操作画面（またはバージョン情報）の場所: サーバーログを出しているときはその上
+static RECT MainRect() {
+    RECT rc = ContentRect();
+    if (LogShown()) rc.bottom = LogRect().top;
+    return rc;
+}
+
+static void FitLog() {
+    if (!g_log) return;
+    if (!LogShown()) {
+        ShowWindow(g_log, SW_HIDE);
+        return;
+    }
+    RECT rc = LogRect();
+    SetWindowPos(g_log, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+static void FitEmbedded() {
+    FitLog();
+    if (!g_embedded) return;
+    RECT rc = MainRect();
     SetWindowPos(g_embedded, HWND_TOP, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+/// サーバーの出力をサーバーログに足す（色の制御文字は外す。長くなったら古いほうを消す）
+static void AppendLog(const std::string& utf8) {
+    if (!g_log) return;
+    std::string clean;
+    clean.reserve(utf8.size());
+    for (size_t i = 0; i < utf8.size(); i++) {
+        if (utf8[i] == '\x1b' && i + 1 < utf8.size() && utf8[i + 1] == '[') {
+            size_t j = i + 2;
+            while (j < utf8.size() && !((utf8[j] >= 'A' && utf8[j] <= 'Z') || (utf8[j] >= 'a' && utf8[j] <= 'z'))) j++;
+            i = j;
+            continue;
+        }
+        if (utf8[i] == '\r') continue;
+        if (utf8[i] == '\n') clean += '\r';
+        clean += utf8[i];
+    }
+    std::wstring w = Widen(clean);
+    int len = GetWindowTextLengthW(g_log);
+    if (len > 300000) {
+        SendMessageW(g_log, EM_SETSEL, 0, 100000);
+        SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)L"");
+        len = GetWindowTextLengthW(g_log);
+    }
+    SendMessageW(g_log, EM_SETSEL, len, len);
+    SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)w.c_str());
+    SendMessageW(g_log, EM_SCROLLCARET, 0, 0);
+}
+
+/// サーバーログの表示を切り替えたあと、場所を並べ直す
+static void RelayoutLog() {
+    FitEmbedded();
+    InvalidateRect(g_main, nullptr, TRUE);
 }
 
 /// 埋め込んだ操作ウィンドウのうち、これを見せる（ほかは隠す）。nullptr ならバージョン情報を見せる
@@ -320,10 +422,8 @@ static void ShowEmbedded(HWND op) {
     for (auto& c : g_children)
         if (c.embedded && c.embedded != op && IsWindow(c.embedded)) ShowWindow(c.embedded, SW_HIDE);
     g_embedded = op;
-    if (op) {
-        FitEmbedded();
-        SetFocus(op);
-    }
+    FitEmbedded();  // サーバーログの場所も変わる（操作画面があれば下側、なければ画面の大部分）
+    if (op) SetFocus(op);
     InvalidateRect(g_main, nullptr, TRUE);
 }
 
@@ -367,7 +467,7 @@ static void OnEmbedTimer() {
 }
 
 // ---- ボタンの押された状態 ----
-static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO, ID_MAJSOUL};
+static const UINT kToggles[] = {ID_SERVER, ID_BROADCAST, ID_INPUT, ID_PLAYER, ID_DEMO, ID_MAJSOUL, ID_LOG};
 
 /// 取り込んだ対局（data\majsoul の JSON）を選ぶ。やめたら空
 static std::wstring PickDummyFile() {
@@ -515,7 +615,10 @@ static HWND OutputWindow() {
 static std::wstring CommandFile() { return InDir(L"data\\client-command.txt"); }
 
 /// ボタンが「動いている」状態か（配信画面は、入力担当の配信画面が開いているか）
-static bool IsOn(UINT fn) { return fn == ID_BROADCAST ? OutputWindow() != nullptr : Running(fn) != nullptr; }
+static bool IsOn(UINT fn) {
+    if (fn == ID_LOG) return g_logVisible;
+    return fn == ID_BROADCAST ? OutputWindow() != nullptr : Running(fn) != nullptr;
+}
 
 static void UpdateToggleButtons() {
     for (UINT fn : kToggles) {
@@ -597,8 +700,20 @@ static void StartServer(bool resume, bool dummy = false, const std::wstring& dum
     if (!dummyFile.empty()) args += L" --dummy-file \"" + dummyFile + L"\"";
     else if (dummy) args += L" --dummy";
     dummy = dummy || !dummyFile.empty();
-    Launch(ID_SERVER, dummy ? L"サーバー（ダミー対局データ）" : resume ? L"サーバー（再開）" : L"サーバー", L"janscope-server.exe", args, true);
-    InvalidateRect(g_main, nullptr, TRUE);
+    // サーバーの出力（接続コード・ログ）はメインウィンドウのサーバーログに出す
+    std::wstring title = dummy ? L"サーバー（ダミー対局データ）" : resume ? L"サーバー（再開）" : L"サーバー";
+    g_logUsed = true;
+    if (g_log) {
+        SYSTEMTIME t;
+        GetLocalTime(&t);
+        wchar_t head[128];
+        swprintf(head, 128, L"\r\n---- %ls を起動しました（%02d:%02d:%02d）----\r\n", title.c_str(), t.wHour, t.wMinute, t.wSecond);
+        int len = GetWindowTextLengthW(g_log);
+        SendMessageW(g_log, EM_SETSEL, len, len);
+        SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)head);
+    }
+    Launch(ID_SERVER, title, L"janscope-server.exe", args, true, true);
+    RelayoutLog();
 }
 
 static void StartClient(UINT fn, const std::wstring& dummyFile = L"", bool withOutput = false) {
@@ -1007,6 +1122,8 @@ static HMENU BuildMenu() {
     AppendMenuW(view, MF_STRING, ID_VIEW_INPUT, L"入力担当の操作画面(&I)");
     AppendMenuW(view, MF_STRING, ID_VIEW_DEMO, L"ダミーで確認(&D)");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view, MF_STRING, ID_LOG, L"サーバーログ(&L)");
+    AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(view, MF_STRING, ID_VIEW_INFO, L"バージョン情報の表示に戻す(&V)");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)view, L"表示(&V)");
 
@@ -1059,6 +1176,7 @@ static const TbItem kToolbar[] = {
     {ID_MAJSOUL, L"雀魂の牌譜", L"雀魂の牌譜を取り込んで、ダミーデータにします（牌譜の URL を貼るか、Chrome でログインして牌譜を開く）"},
     {ID_DEMO, L"ダミーで確認", L"機能の確認用: ダミー対局データ入りのサーバーを中で動かした入力担当と配信画面（サーバー・接続コードは不要）"},
     {0, nullptr, nullptr},
+    {ID_LOG, L"サーバーログ", L"サーバーのログ（接続コードなど）の表示・非表示。操作画面があるときは下側に出ます"},
     {ID_SETTINGS, L"接続の設定", L"サーバーのアドレス・接続コード・選手用画面のモニター"},
     {ID_UPDATE_CHECK, L"更新の確認", L"新しい版があるか確かめます"},
 };
@@ -1131,6 +1249,7 @@ static void MakeFonts(UINT dpi) {
     if (g_font) DeleteObject(g_font);
     if (g_fontTitle) DeleteObject(g_fontTitle);
     if (g_fontSmall) DeleteObject(g_fontSmall);
+    if (g_fontLog) DeleteObject(g_fontLog);
     NONCLIENTMETRICSW ncm{};
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, dpi);
@@ -1142,6 +1261,13 @@ static void MakeFonts(UINT dpi) {
     LOGFONTW s = ncm.lfMessageFont;
     s.lfHeight = -MulDiv(9, dpi, 72);
     g_fontSmall = CreateFontIndirectW(&s);
+    // サーバーログ: 等幅（日本語も出せる MS ゴシック）
+    LOGFONTW lg{};
+    lg.lfHeight = -MulDiv(10, dpi, 72);
+    lg.lfCharSet = DEFAULT_CHARSET;
+    wcscpy_s(lg.lfFaceName, L"MS Gothic");
+    g_fontLog = CreateFontIndirectW(&lg);
+    if (g_log) SendMessageW(g_log, WM_SETFONT, (WPARAM)g_fontLog, TRUE);
 }
 
 /// 中央: 名前・版・接続の要約（シンプルに）
@@ -1155,7 +1281,7 @@ static void Paint(HWND h) {
     FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
     RECT line{all.left, bar.bottom - 1, all.right, bar.bottom};
     FillRect(dc, &line, GetSysColorBrush(COLOR_3DSHADOW));
-    RECT rc = ContentRect();
+    RECT rc = MainRect();
     if (g_embedded) {
         EndPaint(h, &ps);
         return;
@@ -1259,6 +1385,12 @@ static void OnCommand(UINT id) {
         case ID_DEMO:
         case ID_MAJSOUL: Toggle(id); break;
         case ID_MAJSOUL_URL: OpenMajsoulUrl(); break;
+        case ID_LOG:
+            g_logVisible = !g_logVisible;
+            if (g_logVisible && !g_logUsed) SetStatus(1, L"サーバーを起動すると、ここにサーバーのログが出ます");
+            UpdateToggleButtons();
+            RelayoutLog();
+            break;
         case ID_DUMMY_FILE: {
             if (Running(ID_DEMO)) {
                 Error(L"ダミーで確認しているクライアントが動いています。いったん終了してください。");
@@ -1337,6 +1469,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             BuildToolbar(h);
             g_status = CreateWindowExW(0, STATUSCLASSNAMEW, nullptr, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, h, nullptr, g_inst, nullptr);
             SendMessageW(g_status, WM_SETFONT, (WPARAM)g_font, TRUE);
+            g_log = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                    WS_CHILD | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL, 0, 0, 0,
+                                    0, h, nullptr, g_inst, nullptr);
+            SendMessageW(g_log, EM_SETLIMITTEXT, 0, 0);
+            SendMessageW(g_log, WM_SETFONT, (WPARAM)(g_fontLog ? g_fontLog : g_font), TRUE);
             SetTimer(h, TIMER_CHILDREN, 1000, nullptr);
             RefreshChildren();
             UpdateMenuState();
@@ -1372,6 +1509,20 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         case WM_COMMAND: OnCommand(LOWORD(w)); return 0;
         case WM_APP_UPDATE_INFO: OnUpdateInfo((UpdateInfo*)l, w != 0); return 0;
+        case WM_APP_LOG: {
+            auto* t = (std::string*)l;
+            AppendLog(*t);
+            delete t;
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC:
+            // 読み取り専用のサーバーログも白地にする
+            if ((HWND)l == g_log) {
+                SetBkColor((HDC)w, GetSysColor(COLOR_WINDOW));
+                SetTextColor((HDC)w, GetSysColor(COLOR_WINDOWTEXT));
+                return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+            }
+            break;
         case WM_CLOSE:
             if (!g_children.empty() &&
                 MessageBoxW(h, std::any_of(g_children.begin(), g_children.end(), [](const Child& c) { return c.embedded != nullptr; }) ? L"このウィンドウの中の操作画面（と出力ウィンドウ）も閉じます。サーバーなど別のウィンドウのものは動いたままです。\n閉じますか？"
@@ -1393,6 +1544,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     InitCommonControlsEx(&icc);
     g_version = Version();
     g_set = LoadSettings();
+    // サーバーのログに色の制御文字を出さない（子のプロセスに引き継ぐ）
+    SetEnvironmentVariableW(L"NO_COLOR", L"1");
     CleanupUpdaters();
 
     WNDCLASSEXW wc{sizeof(wc)};
