@@ -211,6 +211,11 @@ pub struct Shared {
     tracker: Tracker,
     /// 型定義を待っていることを知らせた
     told_waiting: bool,
+    /// ゲームのページの場所（`https://game.mahjongsoul.com/` など。型定義を直接取ってくるのに使う）
+    base: Option<String>,
+    /// 型定義を直接取りに行っている・最後に取りに行った時刻
+    fetching: bool,
+    last_fetch: Option<Instant>,
 }
 
 impl Shared {
@@ -225,7 +230,26 @@ impl Shared {
             backlog: vec![],
             tracker: Tracker::default(),
             told_waiting: false,
+            base: None,
+            fetching: false,
+            last_fetch: None,
         }
+    }
+
+    /// 型定義がまだなく、取りに行っていなければ、取りに行く場所を返す（20秒に1回まで）
+    fn want_fetch(&mut self) -> Option<String> {
+        if self.schema.is_some() || self.fetching {
+            return None;
+        }
+        if self
+            .last_fetch
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(20))
+        {
+            return None;
+        }
+        self.fetching = true;
+        self.last_fetch = Some(Instant::now());
+        Some(self.base.clone().unwrap_or_else(|| DEFAULT_URL.to_string()))
     }
 
     fn frame(&mut self, sent: bool, data: Vec<u8>, tx: &Sender<Event>) {
@@ -301,6 +325,9 @@ impl Shared {
     }
 
     fn set_schema(&mut self, text: &str, tx: &Sender<Event>) {
+        if self.schema.is_some() {
+            return;
+        }
         match Schema::from_json(text) {
             Err(e) => {
                 let _ = tx.send(Event::Info(format!("型定義を読めませんでした: {e}")));
@@ -320,6 +347,59 @@ impl Shared {
             _ => {}
         }
     }
+}
+
+/// 型定義（liqi.json）を雀魂のサーバーから直接取ってくる。
+/// ゲームが型定義を読み込むところを見つけられなかったときに使う（`version.json` → `resversion<版>.json` → `<prefix>/res/proto/liqi.json`）
+pub fn fetch_schema(base: &str) -> Result<String, String> {
+    let get = |u: &str| -> Result<String, String> {
+        ureq::get(u)
+            .call()
+            .map_err(|e| format!("{u}: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024 * 1024)
+            .read_to_string()
+            .map_err(|e| format!("{u}: {e}"))
+    };
+    let json = |u: &str| -> Result<Value, String> {
+        serde_json::from_str(&get(u)?).map_err(|e| format!("{u}: {e}"))
+    };
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let v = json(&format!("{base}version.json?randv={t}"))?;
+    let ver = v
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or("version.json に版がありません")?;
+    let r = json(&format!("{base}resversion{ver}.json"))?;
+    let prefix = r
+        .pointer("/res/res~1proto~1liqi.json/prefix")
+        .and_then(Value::as_str)
+        .ok_or("resversion に型定義（res/proto/liqi.json）がありません")?;
+    get(&format!("{base}{prefix}/res/proto/liqi.json"))
+}
+
+/// 型定義を直接取ってきて入れる（別のスレッドで）
+fn spawn_fetch(base: String, shared: Arc<Mutex<Shared>>, tx: Sender<Event>) {
+    std::thread::spawn(move || {
+        let _ = tx.send(Event::Info(format!(
+            "ゲームが読み込んだ型定義が見つからないので、雀魂のサーバーから直接取ってきます（{base}）…"
+        )));
+        let r = fetch_schema(&base);
+        let mut sh = shared.lock().unwrap();
+        sh.fetching = false;
+        match r {
+            Ok(text) => sh.set_schema(&text, &tx),
+            Err(e) => {
+                let _ = tx.send(Event::Info(format!(
+                    "型定義を取ってこられませんでした（20秒後にまた試します）: {e}"
+                )));
+            }
+        }
+    });
 }
 
 /// 1つのタブの DevTools につないで、閉じられるまで読む。`navigate` があれば、読み始めてからそのページへ移る
@@ -372,7 +452,7 @@ pub fn watch_page(
             if body_calls.remove(&id).is_some() {
                 if let Some(e) = v.pointer("/error/message").and_then(Value::as_str) {
                     let _ = tx.send(Event::Info(format!(
-                        "型定義の中身を取れませんでした（{e}）。ページを再読み込みしてください"
+                        "ゲームが読み込んだ型定義の中身を取れませんでした（{e}）。あとで直接取りに行きます"
                     )));
                 }
                 if let Some(r) = v.get("result") {
@@ -432,6 +512,21 @@ pub fn watch_page(
                         info(format!("ページを開けませんでした（{status}）: {url}"));
                     } else if !url.starts_with("about:") {
                         info(format!("ページを開きました: {url}"));
+                        // ゲームのページの場所（最初に開いたページ、または雀魂のページ）
+                        let game = ["mahjongsoul", "maj-soul", "majsoul"]
+                            .iter()
+                            .any(|h| url.contains(h));
+                        let mut sh = shared.lock().unwrap();
+                        if url.starts_with("http") && (game || sh.base.is_none()) {
+                            let path = url.split(['?', '#']).next().unwrap_or(url);
+                            if let Some(i) = path.rfind('/') {
+                                if i > path.find("//").map(|j| j + 1).unwrap_or(0) {
+                                    sh.base = Some(path[..=i].to_string());
+                                } else {
+                                    sh.base = Some(format!("{path}/"));
+                                }
+                            }
+                        }
                     }
                 }
                 let file = url
@@ -474,10 +569,14 @@ pub fn watch_page(
                 let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else {
                     continue;
                 };
-                shared
-                    .lock()
-                    .unwrap()
-                    .frame(method.ends_with("Sent"), bytes, &tx);
+                let fetch = {
+                    let mut sh = shared.lock().unwrap();
+                    sh.frame(method.ends_with("Sent"), bytes, &tx);
+                    sh.want_fetch()
+                };
+                if let Some(base) = fetch {
+                    spawn_fetch(base, shared.clone(), tx.clone());
+                }
             }
             _ => {}
         }
