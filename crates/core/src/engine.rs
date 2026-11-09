@@ -455,10 +455,22 @@ fn settle_wins(s: &mut TableState, wins: &[WinInput]) -> Result<Vec<Overlay>, En
         let pao = w
             .pao
             .filter(|_| matches!(score.limit, Some(Limit::Yakuman(_))));
+        // 何倍役満か（Mリーグ方式の包で、包の人が払うのは1つ分だけ）
+        let yakuman_n = match score.limit {
+            Some(Limit::Yakuman(n)) => (n as i64).max(1),
+            _ => 1,
+        };
+        let mleague = s.config.pao_mleague;
         if let Some(l) = w.loser {
             let pay = score.ron_points as i64;
             let bonus = hp * honba;
-            if let Some(p) = pao.filter(|p| *p != l) {
+            if let (Some(p), true) = (pao.filter(|p| *p != l), mleague) {
+                // 包の役満1つ分を折半、残りは放銃者。積み場は包の人
+                let unit = pay / yakuman_n;
+                let half = ceil100(unit / 2);
+                d[p.index()] -= half + bonus as i32;
+                d[l.index()] -= pay as i32 - half;
+            } else if let Some(p) = pao.filter(|p| *p != l) {
                 let half = ceil100(pay / 2);
                 d[p.index()] -= half;
                 d[l.index()] -= (pay as i32 - half) + bonus as i32;
@@ -466,6 +478,30 @@ fn settle_wins(s: &mut TableState, wins: &[WinInput]) -> Result<Vec<Overlay>, En
                 d[l.index()] -= (pay + bonus) as i32;
             }
             d[win] += (pay + bonus) as i32;
+        } else if let (Some(p), true) = (pao, mleague) {
+            // 包の役満1つ分（ロン相当）と積み場は包の人。残りの役満は普通のツモの払い方
+            let full = if score.is_dealer {
+                score.tsumo_dealer_pays * 3
+            } else {
+                score.tsumo_dealer_pays + 2 * score.tsumo_child_pays
+            } as i64;
+            let unit = full / yakuman_n;
+            let bonus = hp * honba;
+            d[p.index()] -= (unit + bonus) as i32;
+            d[win] += (unit + bonus) as i32;
+            for o in SeatId::ALL {
+                if o == w.winner {
+                    continue;
+                }
+                let base = if o == dealer || score.is_dealer {
+                    score.tsumo_dealer_pays
+                } else {
+                    score.tsumo_child_pays
+                } as i64;
+                let pay = (base * (yakuman_n - 1) / yakuman_n) as i32;
+                d[o.index()] -= pay;
+                d[win] += pay;
+            }
         } else if let Some(p) = pao {
             let full = if score.is_dealer {
                 score.tsumo_dealer_pays * 3
@@ -671,8 +707,24 @@ fn unique_top(s: &TableState) -> bool {
 
 fn finish(s: &mut TableState) {
     if s.config.leftover_kyotaku_to_top && s.kyotaku > 0 {
-        let top = s.rank_order()[0];
-        s.seats[top.index()].score += s.kyotaku as i32 * 1_000;
+        let order = s.rank_order();
+        let top_score = s.seats[order[0].index()].score;
+        // 同点のトップが複数で「同順位」なら等分（割り切れない分は起家に近い人が多く取る）
+        let tops: Vec<SeatId> = if s.config.tie_break == TieBreak::Split {
+            order
+                .iter()
+                .copied()
+                .filter(|x| s.seats[x.index()].score == top_score)
+                .collect()
+        } else {
+            vec![order[0]]
+        };
+        // 1本（1,000点）ごとに分けて本数を掛ける（3人なら 400・300・300、2本なら 800・600・600）
+        let k = tops.len() as i32;
+        for (i, t) in tops.iter().enumerate() {
+            let per = 10 / k + if (i as i32) < 10 % k { 1 } else { 0 };
+            s.seats[t.index()].score += per * 100 * s.kyotaku as i32;
+        }
         s.kyotaku = 0;
     }
     s.phase = Phase::GameOver;
@@ -695,9 +747,14 @@ pub fn final_results(s: &TableState) -> Vec<FinalResult> {
                 j += 1;
             }
         }
-        let share = bonus[i..j].iter().sum::<f64>() / (j - i) as f64;
-        for seat in &order[i..j] {
-            let pts = (sc - cfg.return_points) as f64 / 1_000.0 + share / 1_000.0;
+        // 同順位は順位点を等分する（0.1ポイント単位。割り切れない分は起家に近い人が大きく取る）
+        let units = (bonus[i..j].iter().sum::<f64>() / 100.0).round() as i64;
+        let k = (j - i) as i64;
+        let base = units.div_euclid(k);
+        let rem = units.rem_euclid(k);
+        for (n, seat) in order[i..j].iter().enumerate() {
+            let share_units = base + if (n as i64) < rem { 1 } else { 0 };
+            let pts = (sc - cfg.return_points) as f64 / 1_000.0 + share_units as f64 / 10.0;
             out.push(FinalResult {
                 seat: *seat,
                 rank: i as u8 + 1,

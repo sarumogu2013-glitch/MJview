@@ -513,7 +513,8 @@ fn rules_editor(ui: &mut egui::Ui, d: &mut GameConfig) {
             ui.label("同点の順位");
             ui.horizontal(|ui| {
                 ui.radio_value(&mut d.tie_break, TieBreak::SeatOrder, "起家優先");
-                ui.radio_value(&mut d.tie_break, TieBreak::Split, "同順位（ウマ等分）");
+                ui.radio_value(&mut d.tie_break, TieBreak::Split, "同順位（順位点を等分）")
+                    .on_hover_text("割り切れない分は起家に近い人が大きく取る");
             });
             ui.end_row();
             ui.label("局開始の残り牌数");
@@ -539,8 +540,13 @@ fn rules_editor(ui: &mut egui::Ui, d: &mut GameConfig) {
                 ui.checkbox(&mut d.tenpai_renchan, "テンパイ連荘")
                     .on_hover_text("OFF なら流局は親のテンパイに関わらず親流れ");
                 ui.checkbox(&mut d.all_last_dealer_stop, "オーラスのアガリ止め");
-                ui.checkbox(&mut d.leftover_kyotaku_to_top, "終局時の供託はトップへ");
+                ui.checkbox(&mut d.leftover_kyotaku_to_top, "終局時の供託はトップへ")
+                    .on_hover_text("同点のトップが複数で「同順位」なら等分（3人なら 400・300・300）");
             });
+            ui.end_row();
+            ui.label("包（パオ）");
+            ui.checkbox(&mut d.pao_mleague, "Mリーグ方式")
+                .on_hover_text("積み場は包の人が払う。ダブル役満以上は包の役満1つ分だけを包の人が払い、残りは普通の払い方。OFF なら役満のツモは包の人が全額、ロンは折半（積み場は放銃者）");
             ui.end_row();
         });
 }

@@ -384,3 +384,98 @@ fn set_config_mid_game() {
     apply(&mut s, &Action::SetConfig { config: c2 }).unwrap();
     assert_ne!(s.final_results.clone().unwrap(), before);
 }
+
+/// Mリーグ準拠のプリセット: 頭ハネ・途中流局なし・同点は順位点を分ける・包は Mリーグ方式
+mod mleague {
+    use super::*;
+    use janscope_core::scoring::{Meld, MeldKind};
+
+    #[test]
+    fn preset_values() {
+        let c = GameConfig::preset_mleague_custom();
+        assert!(c.validate().is_empty());
+        assert_eq!(c.multi_ron, MultiRon::HeadBump);
+        assert!(!c.bust_ends && !c.all_last_dealer_stop && !c.kazoe_yakuman);
+        assert!(!c.abortive.kyuushu_kyuuhai);
+        // 1位はウマ +20 とオカ +20 で +40
+        assert_eq!(c.uma[0] + c.oka_points(), 40_000);
+    }
+
+    #[test]
+    fn tie_splits_points_with_seat_order_remainder() {
+        let mut s = start(GameConfig::preset_mleague_custom());
+        // 3人が同点（2〜4位）: 順位点 +20,0,−40 の合計 −20 を3人で分ける → −6.6, −6.7, −6.7
+        apply(
+            &mut s,
+            &Action::ManualAdjust {
+                deltas: [15_000, -5_000, -5_000, -5_000],
+                reason: "テスト".into(),
+            },
+        )
+        .unwrap();
+        apply(&mut s, &Action::EndGame).unwrap();
+        let fr = s.final_results.clone().unwrap();
+        let p = |seat: SeatId| fr.iter().find(|r| r.seat == seat).unwrap().points;
+        assert_eq!(p(A), 10.0 + 40.0);
+        // 持ち点 20,000 → −10.0、それぞれに順位点
+        assert_eq!(p(B), -10.0 - 6.6);
+        assert_eq!(p(C), -10.0 - 6.7);
+        assert_eq!(p(D), -10.0 - 6.7);
+    }
+
+    #[test]
+    fn leftover_kyotaku_split_among_tied_tops() {
+        let mut s = start(GameConfig::preset_mleague_custom());
+        hand(&mut s);
+        apply(&mut s, &Action::Riichi { seat: A }).unwrap();
+        apply(&mut s, &Action::Riichi { seat: B }).unwrap();
+        // A・B・C が同点トップになるよう合わせる（A,B はリーチ棒 −1,000）
+        apply(
+            &mut s,
+            &Action::ManualAdjust {
+                deltas: [1_000, 1_000, 0, -2_000],
+                reason: "テスト".into(),
+            },
+        )
+        .unwrap();
+        apply(&mut s, &Action::EndGame).unwrap();
+        // 供託2本: 800・600・600（起家に近い順）
+        assert_eq!(s.seats[0].score, 25_800);
+        assert_eq!(s.seats[1].score, 25_600);
+        assert_eq!(s.seats[2].score, 25_600);
+    }
+
+    #[test]
+    fn pao_double_yakuman_tsumo_mleague() {
+        // 1本場、西家（C）が鳴かせて、南家（B）が大三元・字一色をツモ（ダブル役満）
+        // 東家 16,000、西家 32,300＋8,000、北家 8,000
+        let mut s = start(GameConfig::preset_mleague_custom());
+        apply(
+            &mut s,
+            &Action::SetRound {
+                wind: Wind::East,
+                number: 1,
+                honba: 1,
+                kyotaku: 0,
+            },
+        )
+        .unwrap();
+        hand(&mut s);
+        let pon = |t: &str, from: SeatId| Meld {
+            kind: MeldKind::Pon,
+            tiles: parse_tiles(t).unwrap(),
+            from: Some(from),
+        };
+        let w = WinInput {
+            winner: B,
+            loser: None,
+            closed: parse_tiles("11122z").unwrap(),
+            melds: vec![pon("555z", A), pon("666z", D), pon("777z", C)],
+            win_tile: "2z".parse().unwrap(),
+            pao: Some(C),
+            ..pinfu(B, None)
+        };
+        win(&mut s, vec![w]);
+        assert_eq!(s.last_deltas, [-16_000, 64_300, -40_300, -8_000]);
+    }
+}

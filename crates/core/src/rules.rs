@@ -92,8 +92,11 @@ pub struct GameConfig {
     pub tenpai_renchan: bool,
     /// オーラスで親がトップのとき、親のアガリ・テンパイで終局する（アガリ止め）
     pub all_last_dealer_stop: bool,
-    /// 終局時に残った供託をトップに与える
+    /// 終局時に残った供託をトップに与える（同点のトップが複数で「同順位」なら等分）
     pub leftover_kyotaku_to_top: bool,
+    /// 包の精算を Mリーグ方式にする: 積み場は包の人が払う。ダブル役満以上は、包の役満1つ分だけを包の人が払い、
+    /// 残りは普通の払い方（ツモは3人、ロンは放銃者）。OFF なら役満のツモは包の人が全額、ロンは折半（積み場は放銃者）
+    pub pao_mleague: bool,
 }
 
 impl Default for GameConfig {
@@ -138,6 +141,7 @@ impl GameConfig {
             tenpai_renchan: true,
             all_last_dealer_stop: true,
             leftover_kyotaku_to_top: true,
+            pao_mleague: false,
         }
     }
 
@@ -170,6 +174,59 @@ impl GameConfig {
         }
     }
 
+    /// Mリーグのルールに合わせ、勝ち点（順位点、オカ込み）を 1位+40・2位+20・3位0・4位−40 にしたもの。
+    /// 25,000持ち30,000返し、赤3、喰いタン・後付け・一発・裏ドラ・カンドラ・カン裏あり、ダブロンなし（頭ハネ）、
+    /// トビ終了なし、途中流局なし、オーラスのアガリ止めなし。そのほかは Mリーグのルール
+    /// （切り上げ満貫、数え役満なし（三倍満まで）、役満の複合あり・ダブル役満なし、連風牌の雀頭2符、テンパイ連荘、
+    /// 聴牌料3,000、積み場300、同点は順位点を分ける、流局終了の供託はトップ、包は Mリーグ方式）
+    pub fn preset_mleague_custom() -> Self {
+        GameConfig {
+            name: "Mリーグ準拠（勝ち点 +40/+20/0/−40）".into(),
+            start_points: 25_000,
+            return_points: 30_000,
+            // オカ（(30,000−25,000)×4 = 20,000）を1位に足して +40/+20/0/−40
+            uma: [20_000, 20_000, 0, -40_000],
+            oka: true,
+            red_fives: 3,
+            kuitan: true,
+            atozuke: true,
+            length: GameLength::Hanchan,
+            west_extension: false,
+            bust_ends: false,
+            multi_ron: MultiRon::HeadBump,
+            kiriage_mangan: true,
+            kazoe_yakuman: false,
+            double_yakuman: false,
+            multiple_yakuman: true,
+            honba_points: 300,
+            double_wind_pair_fu: DoubleWindPairFu::Two,
+            abortive: AbortiveDraws {
+                kyuushu_kyuuhai: false,
+                suufon_renda: false,
+                suukan_sanra: false,
+                suucha_riichi: false,
+                sancha_hou: false,
+            },
+            tie_break: TieBreak::Split,
+            wall_start: 70,
+            dice_twice: false,
+            noten_penalty: 3_000,
+            tenpai_renchan: true,
+            all_last_dealer_stop: false,
+            leftover_kyotaku_to_top: true,
+            pao_mleague: true,
+        }
+    }
+
+    /// Mリーグ公式戦のルール（順位点 1位+50・2位+10・3位−10・4位−30、オカ込み）。
+    pub fn preset_mleague() -> Self {
+        GameConfig {
+            name: "Mリーグ公式（順位点 +50/+10/−10/−30）".into(),
+            uma: [30_000, 10_000, -10_000, -30_000],
+            ..Self::preset_mleague_custom()
+        }
+    }
+
     /// 東風戦の初期値。
     pub fn preset_tonpuu() -> Self {
         GameConfig {
@@ -182,6 +239,8 @@ impl GameConfig {
     pub fn presets() -> Vec<GameConfig> {
         vec![
             Self::preset_standard(),
+            Self::preset_mleague_custom(),
+            Self::preset_mleague(),
             Self::preset_pro_like(),
             Self::preset_tonpuu(),
         ]

@@ -1121,6 +1121,28 @@ fn win_panel(
         }
     });
     ui.horizontal(|ui| {
+        ui.label("包（パオ）");
+        let name = |x: Option<SeatId>| match x {
+            None => "なし".to_string(),
+            Some(p) => seat_name(state, p),
+        };
+        egui::ComboBox::from_id_salt("pao")
+            .selected_text(name(u.win.pao))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut u.win.pao, None, "なし");
+                for p in SeatId::ALL.into_iter().filter(|p| *p != u.win.winner) {
+                    ui.selectable_value(&mut u.win.pao, Some(p), seat_name(state, p));
+                }
+            })
+            .response
+            .on_hover_text(
+                "大三元・大四喜・四槓子を確定させる牌を鳴かせた人（役満のときだけ使われる）",
+            );
+        if u.win.pao == Some(u.win.winner) {
+            u.win.pao = None;
+        }
+    });
+    ui.horizontal(|ui| {
         ui.label("入力先:");
         ui.radio_value(
             &mut u.target,
