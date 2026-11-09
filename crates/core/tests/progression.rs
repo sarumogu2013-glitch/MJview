@@ -397,14 +397,29 @@ mod mleague {
         assert_eq!(c.multi_ron, MultiRon::HeadBump);
         assert!(!c.bust_ends && !c.all_last_dealer_stop && !c.kazoe_yakuman);
         assert!(!c.abortive.kyuushu_kyuuhai);
-        // 1位はウマ +20 とオカ +20 で +40
-        assert_eq!(c.uma[0] + c.oka_points(), 40_000);
+        // 1位はウマ +40 とオカ +20 で +60（運営・集計ブックの例: 45,100点の1位 → 35.1 ＋ ウマ40）
+        assert_eq!(c.uma, [40_000, 10_000, -10_000, -40_000]);
+        assert_eq!(c.uma[0] + c.oka_points(), 60_000);
+        let mut s = start(c);
+        apply(
+            &mut s,
+            &Action::ManualAdjust {
+                deltas: [20_100, 3_500, -8_000, -15_600],
+                reason: "集計ブックの第1試合".into(),
+            },
+        )
+        .unwrap();
+        apply(&mut s, &Action::EndGame).unwrap();
+        let fr = s.final_results.clone().unwrap();
+        let p = |seat: SeatId| fr.iter().find(|r| r.seat == seat).unwrap().points;
+        // 集計ブック: 35.1+40 = 75.1、−1.5+10 = 8.5、−13−10 = −23、−20.6−40 = −60.6
+        assert_eq!([p(A), p(B), p(C), p(D)], [75.1, 8.5, -23.0, -60.6]);
     }
 
     #[test]
     fn tie_splits_points_with_seat_order_remainder() {
         let mut s = start(GameConfig::preset_mleague_custom());
-        // 3人が同点（2〜4位）: 順位点 +20,0,−40 の合計 −20 を3人で分ける → −6.6, −6.7, −6.7
+        // 3人が同点（2〜4位）: ウマ +10,−10,−40 の合計 −40 を3人で分ける → −13.3, −13.3, −13.4
         apply(
             &mut s,
             &Action::ManualAdjust {
@@ -416,11 +431,11 @@ mod mleague {
         apply(&mut s, &Action::EndGame).unwrap();
         let fr = s.final_results.clone().unwrap();
         let p = |seat: SeatId| fr.iter().find(|r| r.seat == seat).unwrap().points;
-        assert_eq!(p(A), 10.0 + 40.0);
-        // 持ち点 20,000 → −10.0、それぞれに順位点
-        assert_eq!(p(B), -10.0 - 6.6);
-        assert_eq!(p(C), -10.0 - 6.7);
-        assert_eq!(p(D), -10.0 - 6.7);
+        assert_eq!(p(A), 10.0 + 60.0);
+        // 持ち点 20,000 → −10.0、それぞれに順位点（割り切れない分は起家に近い人が大きく取る）
+        assert_eq!(p(B), -10.0 - 13.3);
+        assert_eq!(p(C), -10.0 - 13.3);
+        assert_eq!(p(D), -10.0 - 13.4);
     }
 
     #[test]
