@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/core", "crates/server", "crates/netclient", "crates/video", "crates/update", "crates/majsoul", "crates/media", "crates/client"]
 
 [workspace.package]
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sarumogu2013-glitch/MJview"

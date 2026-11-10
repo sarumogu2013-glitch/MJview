@@ -158,6 +158,10 @@ struct Settings {
     std::wstring code;
     std::wstring playerMonitor = L"1";
     bool checkOnStart = true;
+    // サーバーログ: 表示するか、高さ（中身の高さに対する割合、%）。操作画面があるとき・ないときで別々
+    bool logVisible = true;
+    int logPctEmbedded = 25;
+    int logPctAlone = 60;
 };
 
 static std::wstring IniPath() { return InDir(L"JanScope.ini"); }
@@ -178,6 +182,9 @@ static Settings LoadSettings() {
     s.code = IniGet(L"code", L"");
     s.playerMonitor = IniGet(L"player_monitor", s.playerMonitor);
     s.checkOnStart = IniGet(L"check_update_on_start", L"1") != L"0";
+    s.logVisible = IniGet(L"log_visible", L"1") != L"0";
+    s.logPctEmbedded = std::clamp(_wtoi(IniGet(L"log_height_embedded", L"25").c_str()), 5, 90);
+    s.logPctAlone = std::clamp(_wtoi(IniGet(L"log_height_alone", L"60").c_str()), 5, 90);
     return s;
 }
 static void SaveSettings(const Settings& s) {
@@ -186,6 +193,9 @@ static void SaveSettings(const Settings& s) {
     IniSet(L"code", s.code);
     IniSet(L"player_monitor", s.playerMonitor);
     IniSet(L"check_update_on_start", s.checkOnStart ? L"1" : L"0");
+    IniSet(L"log_visible", s.logVisible ? L"1" : L"0");
+    IniSet(L"log_height_embedded", std::to_wstring(s.logPctEmbedded));
+    IniSet(L"log_height_alone", std::to_wstring(s.logPctAlone));
 }
 
 static std::wstring NewCode() {
@@ -228,7 +238,8 @@ static int g_barH = 0;
 static HWND g_embedded = nullptr;
 // サーバーログ（メインウィンドウの中のコンソール）。操作画面がないときは画面の大部分、操作画面があるときは下側に収まる
 static HWND g_log = nullptr;
-static bool g_logVisible = true;  // ツールバーの「サーバーログ」
+static bool g_logVisible = true;  // ツールバーの「サーバーログ」（g_set.logVisible と同じ）
+static bool g_logDragging = false;  // サーバーログの境目をドラッグしている
 static bool g_logUsed = false;    // 一度でもサーバーを起動した（ログがある）
 static HFONT g_fontLog = nullptr;
 static HFONT g_font, g_fontTitle, g_fontSmall;
@@ -363,20 +374,51 @@ static RECT ContentRect() {
 /// サーバーログを出すか
 static bool LogShown() { return g_log && g_logVisible && g_logUsed; }
 
-/// サーバーログの場所（操作画面があれば下側のコンソール、なければ画面の大部分）
+/// サーバーログの上の境目（ドラッグで高さを変える・ダブルクリックで隠す）の太さ
+static int SplitterH() { return MulDiv(7, GetDpiForWindow(g_main), 96); }
+
+/// サーバーログの場所（操作画面があれば下側のコンソール、なければ画面の大部分。高さは境目のドラッグで変わる）
 static RECT LogRect() {
     RECT rc = ContentRect();
     int h = rc.bottom - rc.top;
-    int lh = g_embedded ? std::max(MulDiv(140, GetDpiForWindow(g_main), 96), h / 4) : h * 3 / 5;
-    rc.top = rc.bottom - std::min(lh, h);
+    int pct = g_embedded ? g_set.logPctEmbedded : g_set.logPctAlone;
+    int minH = MulDiv(60, GetDpiForWindow(g_main), 96);
+    int lo = std::min(minH, h);
+    int hi = std::max(h - SplitterH() - minH, lo);
+    int lh = std::clamp(h * pct / 100, lo, hi);
+    rc.top = rc.bottom - lh;
     return rc;
 }
 
-/// 操作画面（またはバージョン情報）の場所: サーバーログを出しているときはその上
+/// サーバーログの上の境目
+static RECT SplitterRect() {
+    RECT rc = LogRect();
+    rc.bottom = rc.top;
+    rc.top -= SplitterH();
+    return rc;
+}
+
+/// 操作画面（またはバージョン情報）の場所: サーバーログを出しているときはその上（境目の分もあける）
 static RECT MainRect() {
     RECT rc = ContentRect();
-    if (LogShown()) rc.bottom = LogRect().top;
+    if (LogShown()) rc.bottom = SplitterRect().top;
     return rc;
+}
+
+static bool OnSplitter(int x, int y) {
+    if (!LogShown()) return false;
+    RECT r = SplitterRect();
+    POINT p{x, y};
+    return PtInRect(&r, p) != 0;
+}
+
+/// 境目をドラッグした位置（y）から、サーバーログの高さを決める
+static void DragSplitter(int y) {
+    RECT rc = ContentRect();
+    int h = rc.bottom - rc.top;
+    if (h <= 0) return;
+    int pct = std::clamp((int)((rc.bottom - y) * 100 / h), 5, 90);
+    (g_embedded ? g_set.logPctEmbedded : g_set.logPctAlone) = pct;
 }
 
 static void FitLog() {
@@ -1358,6 +1400,16 @@ static void Paint(HWND h) {
     FillRect(dc, &bar, GetSysColorBrush(COLOR_BTNFACE));
     RECT line{all.left, bar.bottom - 1, all.right, bar.bottom};
     FillRect(dc, &line, GetSysColorBrush(COLOR_3DSHADOW));
+    // サーバーログの上の境目（つまみの線を3本）
+    if (LogShown()) {
+        RECT sp = SplitterRect();
+        FillRect(dc, &sp, GetSysColorBrush(COLOR_BTNFACE));
+        int cx = (sp.left + sp.right) / 2, cy = (sp.top + sp.bottom) / 2;
+        for (int i = -1; i <= 1; i++) {
+            RECT g{cx - MulDiv(20, GetDpiForWindow(h), 96), cy + i * 2, cx + MulDiv(20, GetDpiForWindow(h), 96), cy + i * 2 + 1};
+            FillRect(dc, &g, GetSysColorBrush(COLOR_3DSHADOW));
+        }
+    }
     RECT rc = MainRect();
     if (g_embedded) {
         EndPaint(h, &ps);
@@ -1465,6 +1517,8 @@ static void OnCommand(UINT id) {
         case ID_MAJSOUL_URL: OpenMajsoulUrl(); break;
         case ID_LOG:
             g_logVisible = !g_logVisible;
+            g_set.logVisible = g_logVisible;
+            SaveSettings(g_set);
             if (g_logVisible && !g_logUsed) SetStatus(1, L"サーバーを起動すると、ここにサーバーのログが出ます");
             UpdateToggleButtons();
             RelayoutLog();
@@ -1546,6 +1600,55 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         }
         case WM_SIZE: Layout(h); return 0;
+        case WM_SETCURSOR:
+            if ((HWND)w == h && LOWORD(l) == HTCLIENT) {
+                POINT p;
+                GetCursorPos(&p);
+                ScreenToClient(h, &p);
+                if (g_logDragging || OnSplitter(p.x, p.y)) {
+                    SetCursor(LoadCursor(nullptr, IDC_SIZENS));
+                    return TRUE;
+                }
+            }
+            break;
+        case WM_LBUTTONDOWN:
+            if (OnSplitter((short)LOWORD(l), (short)HIWORD(l))) {
+                g_logDragging = true;
+                SetCapture(h);
+                return 0;
+            }
+            break;
+        case WM_MOUSEMOVE:
+            if (g_logDragging) {
+                DragSplitter((short)HIWORD(l));
+                RelayoutLog();
+                return 0;
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (g_logDragging) {
+                g_logDragging = false;
+                ReleaseCapture();
+                SaveSettings(g_set);
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            g_logDragging = false;
+            break;
+        case WM_LBUTTONDBLCLK:
+            // 境目のダブルクリックで隠す（ツールバーの「サーバーログ」でまた出す）
+            if (OnSplitter((short)LOWORD(l), (short)HIWORD(l))) {
+                g_logVisible = false;
+                g_set.logVisible = false;
+                SaveSettings(g_set);
+                UpdateToggleButtons();
+                UpdateMenuState();
+                RelayoutLog();
+                SetStatus(1, L"サーバーログを隠しました（ツールバーの「サーバーログ」でまた出せます）");
+                return 0;
+            }
+            break;
         case WM_DPICHANGED: {
             MakeFonts(HIWORD(w));
             SendMessageW(g_status, WM_SETFONT, (WPARAM)g_font, TRUE);
@@ -1608,6 +1711,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     InitCommonControlsEx(&icc);
     g_version = Version();
     g_set = LoadSettings();
+    g_logVisible = g_set.logVisible;
     // サーバーのログに色の制御文字を出さない（子のプロセスに引き継ぐ）
     SetEnvironmentVariableW(L"NO_COLOR", L"1");
     CleanupUpdaters();
@@ -1620,6 +1724,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int show) {
     if (!wc.hIcon) wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
     wc.lpszClassName = L"JanScopeLauncher";
+    wc.style = CS_DBLCLKS;  // サーバーログの境目のダブルクリック
     RegisterClassExW(&wc);
 
     WNDCLASSEXW sc{sizeof(sc)};
