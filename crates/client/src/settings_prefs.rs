@@ -186,6 +186,12 @@ pub fn prefs_tab(
             ui.horizontal(|ui| {
                 ui.label("牌譜ファイルの既定のフォルダ");
                 ui.text_edit_singleline(&mut r.folder);
+                crate::filepick::button(
+                    ui,
+                    "paifu_folder",
+                    crate::filepick::Pick::Folder,
+                    &mut r.folder,
+                );
             });
             ui.weak("名場面のしおりは操作ウィンドウの「牌譜再生」欄で登録・呼び出し（janscope-bookmarks.json）");
         }
@@ -348,6 +354,7 @@ fn data_tab(ui: &mut egui::Ui, msg: &mut Option<String>) {
         let id = egui::Id::new("restore_path");
         let mut path: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
         ui.add(egui::TextEdit::singleline(&mut path).hint_text("バックアップのフォルダ").desired_width(360.0));
+        crate::filepick::button(ui, "restore_path", crate::filepick::Pick::Folder, &mut path);
         ui.data_mut(|d| d.insert_temp(id, path.clone()));
         if ui.button("復元").clicked() {
             let from = PathBuf::from(path.trim());

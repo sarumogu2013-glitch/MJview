@@ -2,7 +2,8 @@
 //!
 //! - キャンバス: 中ボタンのドラッグで移動、ホイールで拡大・縮小
 //! - ソースをクリック: 再生（動画）とキャプチャ画（1枚）を切り替える。右クリックで「映像なし」なども選べる（軽くするため）
-//! - ソースの上を左ドラッグ: 枠を置く（使い道は上で選んでおく）。枠をクリックで選び、右の欄で使い道・位置を直す
+//! - ソースの上を左ドラッグ: 枠を置く（使い道は上で選んでおく）。枠をクリックで選び、ドラッグで動かす・辺や角で大きさを変える。右の欄でも使い道・位置を直せる
+//! - 画像・映像のファイルはウィンドウに落とす（ドラッグ＆ドロップ）か「参照…」でも足せる
 //! - 「メディアサーバーに保存」で枠・ソースを送ると、メディアサーバーが枠で切り出した映像を各処理に回す
 //!   （選手顔 → 配信画面の選手画面。手牌確認・河/鳴き確認 → 牌の自動読み取り・確認用）
 
@@ -128,6 +129,17 @@ impl Drop for Poller {
     }
 }
 
+/// 枠の操作（左ドラッグ）
+#[derive(Clone, Debug)]
+enum Edit {
+    /// 新しい枠を置く（ソース, 始点の割合）
+    Create(String, egui::Pos2),
+    /// 選んだ枠を動かす（つかんだ点と枠の左上の差）
+    Move(RegionRole, egui::Vec2),
+    /// 選んだ枠の大きさを変える（つかんだ辺: 左1・右2・上4・下8）
+    Resize(RegionRole, u8),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AddKind {
     Webcam,
@@ -148,8 +160,8 @@ pub struct SandboxUi {
     tex: HashMap<String, (u64, egui::TextureHandle)>,
     pan: egui::Vec2,
     zoom: f32,
-    /// 枠を置いている途中（ソース, 始点の割合）
-    drag: Option<(String, egui::Pos2)>,
+    /// 枠を置いている・動かしている・大きさを変えている途中
+    drag: Option<Edit>,
     selected: Option<RegionRole>,
     new_role: RegionRole,
     menu_target: Option<String>,
@@ -385,7 +397,7 @@ fn toolbar(
                     ui.selectable_value(&mut sb.new_role, r, r.label());
                 }
             });
-        ui.weak("（ソースの上を左ドラッグで枠を置く・中ボタンで移動・ホイールで拡大・クリックで再生／キャプチャ）");
+        ui.weak("（ソースの上を左ドラッグで枠を置く・枠をクリックで選んでドラッグで移動、辺・角で大きさ・中ボタンで移動・ホイールで拡大・クリックで再生／キャプチャ・画像や映像のファイルを落とすと足せる）");
     });
     ui.horizontal_wrapped(|ui| {
         let can_save = sb.dirty && sb.draft.is_some();
@@ -483,10 +495,29 @@ fn toolbar(
                     egui::TextEdit::singleline(&mut sb.add_text)
                         .hint_text(match sb.add_kind {
                             AddKind::Url => "rtmp://… / http://…",
-                            _ => "ファイルの場所（メディアサーバーのPCの）",
+                            _ => "ファイルの場所（ドラッグ＆ドロップでも足せる）",
                         })
                         .desired_width(300.0),
                 );
+                match sb.add_kind {
+                    AddKind::Image => {
+                        crate::filepick::button(
+                            ui,
+                            "sb_image",
+                            crate::filepick::Pick::File("画像", crate::filepick::IMAGE_EXT),
+                            &mut sb.add_text,
+                        );
+                    }
+                    AddKind::Video => {
+                        crate::filepick::button(
+                            ui,
+                            "sb_video",
+                            crate::filepick::Pick::File("映像", crate::filepick::VIDEO_EXT),
+                            &mut sb.add_text,
+                        );
+                    }
+                    _ => {}
+                }
             }
         }
         ui.add(
@@ -499,32 +530,75 @@ fn toolbar(
             .clicked()
         {
             let t = sb.add_text.trim().to_string();
-            let (prefix, kind) = match sb.add_kind {
-                AddKind::Webcam => ("cam", SourceKind::Webcam { device: t.clone() }),
-                AddKind::Image => ("img", SourceKind::Image { path: t.clone() }),
-                AddKind::Video => ("vid", SourceKind::Video { path: t.clone() }),
-                AddKind::Url => ("url", SourceKind::Url { url: t.clone() }),
-            };
-            let d = sb.draft.get_or_insert_with(SandboxConfig::default);
-            let mut n = 1;
-            while d.sources.iter().any(|s| s.id == format!("{prefix}-{n}")) {
-                n += 1;
-            }
-            let name = if sb.add_name.trim().is_empty() {
-                t.rsplit(['/', '\\']).next().unwrap_or(&t).to_string()
-            } else {
-                sb.add_name.trim().to_string()
-            };
-            d.sources.push(SourceDef {
-                id: safe_id(&format!("{prefix}-{n}")),
-                name,
-                kind,
-            });
-            sb.dirty = true;
+            let name = sb.add_name.trim().to_string();
+            add_source(sb, sb.add_kind, &t, &name);
             sb.add_text.clear();
             sb.add_name.clear();
         }
     });
+    // 画像・映像のファイルをウィンドウに落とすと、ソースに足す（保存はボタンで）
+    let dropped: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect()
+    });
+    for p in dropped {
+        let ext = p
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let kind = if crate::filepick::IMAGE_EXT.contains(&ext.as_str()) {
+            Some(AddKind::Image)
+        } else if crate::filepick::VIDEO_EXT.contains(&ext.as_str()) {
+            Some(AddKind::Video)
+        } else {
+            None
+        };
+        let path = p.to_string_lossy().into_owned();
+        match kind {
+            Some(k) => {
+                add_source(sb, k, &path, "");
+                *sb.msg.lock().unwrap() = Some(format!(
+                    "足しました: {path}（「メディアサーバーに保存」で使えるようになります）"
+                ));
+            }
+            None => {
+                *sb.msg.lock().unwrap() = Some(format!(
+                    "画像・映像のファイルではないので足しませんでした: {path}"
+                ))
+            }
+        }
+    }
+}
+
+/// ソースを下書きに足す
+fn add_source(sb: &mut SandboxUi, kind: AddKind, t: &str, name: &str) {
+    let t = t.to_string();
+    let (prefix, kind) = match kind {
+        AddKind::Webcam => ("cam", SourceKind::Webcam { device: t.clone() }),
+        AddKind::Image => ("img", SourceKind::Image { path: t.clone() }),
+        AddKind::Video => ("vid", SourceKind::Video { path: t.clone() }),
+        AddKind::Url => ("url", SourceKind::Url { url: t.clone() }),
+    };
+    let d = sb.draft.get_or_insert_with(SandboxConfig::default);
+    let mut n = 1;
+    while d.sources.iter().any(|s| s.id == format!("{prefix}-{n}")) {
+        n += 1;
+    }
+    let name = if name.is_empty() {
+        t.rsplit(['/', '\\']).next().unwrap_or(&t).to_string()
+    } else {
+        name.to_string()
+    };
+    d.sources.push(SourceDef {
+        id: safe_id(&format!("{prefix}-{n}")),
+        name,
+        kind,
+    });
+    sb.dirty = true;
 }
 
 /// キャンバス（ソースを並べて枠を置く）
@@ -698,49 +772,175 @@ fn canvas(
             ((p.y - r.min.y) / r.height()).clamp(0.0, 1.0),
         )
     };
-    // 左ドラッグで枠を置く
-    if resp.drag_started_by(egui::PointerButton::Primary) {
-        if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
-            if let Some((id, r)) = find(p) {
-                sb.drag = Some((id, norm(&r, p)));
+    // 選んだ枠の、画面上の場所
+    let sel_rect = sb.selected.and_then(|role| {
+        let g = sb
+            .draft
+            .as_ref()?
+            .regions
+            .iter()
+            .find(|r| r.role == role)?
+            .clone();
+        let (_, ir) = image_rects.iter().find(|(i, _)| *i == g.source)?;
+        Some((
+            g.clone(),
+            *ir,
+            egui::Rect::from_min_size(
+                ir.min + egui::vec2(g.x * ir.width(), g.y * ir.height()),
+                egui::vec2(g.w * ir.width(), g.h * ir.height()),
+            ),
+        ))
+    });
+    // 選んだ枠のつまみ（辺の近く）: 左1・右2・上4・下8
+    let grab = 8.0;
+    let handle_at = |p: egui::Pos2| -> Option<u8> {
+        let (_, _, r) = sel_rect.as_ref()?;
+        if !r.expand(grab).contains(p) {
+            return None;
+        }
+        let mut f = 0u8;
+        if (p.x - r.min.x).abs() <= grab {
+            f |= 1;
+        }
+        if (p.x - r.max.x).abs() <= grab {
+            f |= 2;
+        }
+        if (p.y - r.min.y).abs() <= grab {
+            f |= 4;
+        }
+        if (p.y - r.max.y).abs() <= grab {
+            f |= 8;
+        }
+        Some(f)
+    };
+    // 選んだ枠につまみを描く・カーソルを変える
+    if let Some((g, _, r)) = &sel_rect {
+        let c = role_color(g.role);
+        for p in [
+            r.left_top(),
+            r.right_top(),
+            r.left_bottom(),
+            r.right_bottom(),
+            r.center_top(),
+            r.center_bottom(),
+            r.left_center(),
+            r.right_center(),
+        ] {
+            painter.rect_filled(
+                egui::Rect::from_center_size(p, egui::vec2(9.0, 9.0)),
+                1.0,
+                c,
+            );
+        }
+        if let Some(p) = pointer {
+            let icon = match handle_at(p) {
+                Some(5) | Some(10) => Some(egui::CursorIcon::ResizeNwSe),
+                Some(6) | Some(9) => Some(egui::CursorIcon::ResizeNeSw),
+                Some(1) | Some(2) => Some(egui::CursorIcon::ResizeHorizontal),
+                Some(4) | Some(8) => Some(egui::CursorIcon::ResizeVertical),
+                Some(0) => Some(egui::CursorIcon::Grab),
+                _ => None,
+            };
+            if let Some(i) = icon {
+                ui.ctx().set_cursor_icon(i);
             }
         }
     }
-    if let (Some((id, start)), Some(p)) = (sb.drag.clone(), pointer) {
-        if let Some((_, r)) = image_rects.iter().find(|(i, _)| *i == id) {
-            let a = egui::pos2(
-                r.min.x + start.x * r.width(),
-                r.min.y + start.y * r.height(),
-            );
-            painter.rect_stroke(
-                egui::Rect::from_two_pos(a, p),
-                0.0,
-                egui::Stroke::new(2.0, role_color(sb.new_role)),
-                egui::StrokeKind::Inside,
-            );
-            if resp.drag_stopped_by(egui::PointerButton::Primary) {
-                let e = norm(r, p);
-                let (x0, x1) = (start.x.min(e.x), start.x.max(e.x));
-                let (y0, y1) = (start.y.min(e.y), start.y.max(e.y));
-                if x1 - x0 > 0.02 && y1 - y0 > 0.02 {
-                    let role = sb.new_role;
-                    let d = sb.draft.get_or_insert_with(SandboxConfig::default);
-                    d.regions.push(Region {
-                        source: id.clone(),
-                        role,
-                        x: x0,
-                        y: y0,
-                        w: x1 - x0,
-                        h: y1 - y0,
-                    });
-                    d.normalize();
-                    sb.dirty = true;
-                    sb.selected = Some(role);
-                    sb.new_role = sb.next_role();
+    // 左ドラッグ: 選んだ枠の辺 → 大きさ、中 → 動かす、それ以外のソースの上 → 新しい枠
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
+            sb.drag = match (handle_at(p), &sel_rect) {
+                (Some(0), Some((g, _, r))) => Some(Edit::Move(g.role, p - r.min)),
+                (Some(f), Some((g, _, _))) => Some(Edit::Resize(g.role, f)),
+                _ => find(p).map(|(id, r)| Edit::Create(id, norm(&r, p))),
+            };
+        }
+    }
+    match (sb.drag.clone(), pointer) {
+        (Some(Edit::Create(id, start)), Some(p)) => {
+            if let Some((_, r)) = image_rects.iter().find(|(i, _)| *i == id) {
+                let a = egui::pos2(
+                    r.min.x + start.x * r.width(),
+                    r.min.y + start.y * r.height(),
+                );
+                painter.rect_stroke(
+                    egui::Rect::from_two_pos(a, p),
+                    0.0,
+                    egui::Stroke::new(2.0, role_color(sb.new_role)),
+                    egui::StrokeKind::Inside,
+                );
+                if resp.drag_stopped_by(egui::PointerButton::Primary) {
+                    let e = norm(r, p);
+                    let (x0, x1) = (start.x.min(e.x), start.x.max(e.x));
+                    let (y0, y1) = (start.y.min(e.y), start.y.max(e.y));
+                    if x1 - x0 > 0.02 && y1 - y0 > 0.02 {
+                        let role = sb.new_role;
+                        let d = sb.draft.get_or_insert_with(SandboxConfig::default);
+                        d.regions.push(Region {
+                            source: id.clone(),
+                            role,
+                            x: x0,
+                            y: y0,
+                            w: x1 - x0,
+                            h: y1 - y0,
+                        });
+                        d.normalize();
+                        sb.dirty = true;
+                        sb.selected = Some(role);
+                        sb.new_role = sb.next_role();
+                    }
+                    sb.drag = None;
                 }
-                sb.drag = None;
             }
         }
+        (Some(Edit::Move(role, off)), Some(p)) => {
+            if let Some((_, ir, _)) = &sel_rect {
+                let tl = norm(ir, p - off);
+                if let Some(g) = sb
+                    .draft
+                    .as_mut()
+                    .and_then(|d| d.regions.iter_mut().find(|r| r.role == role))
+                {
+                    g.x = tl.x.min(1.0 - g.w);
+                    g.y = tl.y.min(1.0 - g.h);
+                    sb.dirty = true;
+                }
+            }
+        }
+        (Some(Edit::Resize(role, f)), Some(p)) => {
+            if let Some((_, ir, _)) = &sel_rect {
+                let n = norm(ir, p);
+                if let Some(g) = sb
+                    .draft
+                    .as_mut()
+                    .and_then(|d| d.regions.iter_mut().find(|r| r.role == role))
+                {
+                    let (mut x0, mut y0, mut x1, mut y1) = (g.x, g.y, g.x + g.w, g.y + g.h);
+                    let min = 0.02;
+                    if f & 1 != 0 {
+                        x0 = n.x.min(x1 - min);
+                    }
+                    if f & 2 != 0 {
+                        x1 = n.x.max(x0 + min);
+                    }
+                    if f & 4 != 0 {
+                        y0 = n.y.min(y1 - min);
+                    }
+                    if f & 8 != 0 {
+                        y1 = n.y.max(y0 + min);
+                    }
+                    g.x = x0;
+                    g.y = y0;
+                    g.w = x1 - x0;
+                    g.h = y1 - y0;
+                    sb.dirty = true;
+                }
+            }
+        }
+        _ => {}
+    }
+    if resp.drag_stopped_by(egui::PointerButton::Primary) {
+        sb.drag = None;
     }
     if !ui.input(|i| i.pointer.primary_down()) && !resp.drag_stopped() {
         sb.drag = None;

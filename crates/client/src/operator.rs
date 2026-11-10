@@ -1557,6 +1557,7 @@ fn face_settings_panel(
                 ui.label("ffmpeg");
                 ui.add(egui::TextEdit::singleline(&mut d.ffmpeg).desired_width(360.0))
                     .on_hover_text("ffmpeg の実行ファイル。LGPL ビルドを使ってください");
+                crate::filepick::button(ui, "ffmpeg", crate::filepick::Pick::File("ffmpeg", &["exe", ""]), &mut d.ffmpeg);
             });
         } else {
             ui.checkbox(&mut d.obs.enabled, "切替の結果を OBS に反映する（obs-websocket）");
@@ -1873,6 +1874,7 @@ fn tournament_panel(
         ui.horizontal(|ui| {
             ui.label("CSV の保存先フォルダ");
             ui.text_edit_singleline(&mut u.csv_dir);
+            crate::filepick::button(ui, "csv_dir", crate::filepick::Pick::Folder, &mut u.csv_dir);
             if ui.button("CSV を書き出す").clicked() {
                 let dir = std::path::PathBuf::from(u.csv_dir.trim());
                 let a = dir.join("通算順位.csv");
@@ -1909,6 +1911,15 @@ fn replay_panel(ui: &mut egui::Ui, r: &mut crate::replay::Replay, rp: &crate::pr
                     .hint_text("牌譜ファイルのパス")
                     .desired_width(420.0),
             );
+            if crate::filepick::button(
+                ui,
+                "paifu",
+                crate::filepick::Pick::File("牌譜（天鳳形式 JSON）", &["json", "txt"]),
+                &mut r.file,
+            ) {
+                let p = r.file.clone();
+                r.open(&p);
+            }
             if ui.button("開く").clicked() {
                 let p = r.file.clone();
                 r.open(&p);

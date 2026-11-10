@@ -13,6 +13,7 @@ mod cameras;
 mod config;
 mod demo;
 mod face;
+mod filepick;
 mod net;
 mod operator;
 mod output;

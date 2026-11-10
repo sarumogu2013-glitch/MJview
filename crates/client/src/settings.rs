@@ -354,6 +354,12 @@ fn rules_tab(ui: &mut egui::Ui, st: &mut SettingsUi, lib: &mut Library, table: &
                 .hint_text("例: C:\\大会\\ルール.json")
                 .desired_width(360.0),
         );
+        crate::filepick::button(
+            ui,
+            "rule_io",
+            crate::filepick::Pick::File("ルール（JSON）", &["json"]),
+            &mut st.io_path,
+        );
         if ui.button("読込").clicked() {
             match std::fs::read_to_string(st.io_path.trim())
                 .map_err(|e| e.to_string())

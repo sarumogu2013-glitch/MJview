@@ -26,7 +26,10 @@ bevy = { version = "=0.20.1", default-features = false, features = [
     "ui_api", "ui_bevy_render", "2d_bevy_render", "bevy_window", "bevy_text", "png",
     "keyboard", "mouse",
 ] }
-bevy_egui = { version = "=0.43.1", default-features = false, features = ["render"] }
+# manage_clipboard: 入力欄のコピー・貼り付け（Ctrl+C / Ctrl+V）
+bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "manage_clipboard"] }
+# ファイル・フォルダを選ぶダイアログ（Windows は標準のダイアログ。Linux は xdg-desktop-portal）
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 resvg = "0.49"
 winit = { version = "0.30", default-features = false }
 
